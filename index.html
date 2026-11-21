@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#1b1530" />
+  <meta name="description" content="Steuere ein schwarzes Loch durch die Stadt und verschlinge alles." />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <title>Schlund</title>
+  
+</head>
+<body>
+  <canvas id="gl"></canvas>
+  <div id="labels"></div>
+
+  <div id="hud" class="hidden">
+    <div id="timer">2:00</div>
+    <ol id="board"></ol>
+    <div id="levelbox">
+      <div id="levelnum">Lvl 1</div>
+      <div id="levelbar"><div id="levelfill"></div></div>
+    </div>
+    <div id="toast"></div>
+    <div id="joy"><div id="knob"></div></div>
+  </div>
+
+  <div id="menu" class="screen">
+    <div class="card">
+      <h1>SCHLUND</h1>
+      <p class="sub">Friss die Stadt. Werde größer. Friss die anderen.</p>
+      <input id="name" maxlength="14" placeholder="Dein Name" autocomplete="off" />
+      <div id="skins"></div>
+      <button id="play" class="big">SPIELEN</button>
+      <p class="hint">Ziehen / Maus halten oder WASD · 2 Minuten · größtes Loch gewinnt</p>
+      <p id="best"></p>
+      <button id="install" class="small hidden">📲 Als App installieren</button>
+    </div>
+  </div>
+
+  <div id="over" class="screen hidden">
+    <div class="card">
+      <h2 id="overtitle">Zeit um!</h2>
+      <ol id="results"></ol>
+      <p id="overbest"></p>
+      <button id="again" class="big">NOCHMAL</button>
+    </div>
+  </div>
+
+  <div id="loading" class="screen"><div class="spinner"></div><p>Lade Physik (WebAssembly)…</p></div>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
