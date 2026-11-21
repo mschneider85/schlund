@@ -1,4 +1,6 @@
 import './style.css';
+import { SKINS, MODE_NAMES, escapeHtml, type Mode } from './config';
+import type { Game } from './game';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const store = {
@@ -6,57 +8,84 @@ const store = {
   set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* privat */ } },
 };
 
-async function boot() {
-  // dynamisch, damit ein fehlendes WebAssembly-SIMD sauber gemeldet werden kann
-  const { Game, SKINS, MODE_NAMES, escapeHtml } = await import('./game');
-  type Mode = keyof typeof MODE_NAMES;
-  // Physik: Rapier (Rust -> WebAssembly SIMD), wird per ESM-Integration geladen
-  const game = new Game($<HTMLCanvasElement>('gl'));
-
-  // Menü
-  let skin = Number(store.get('skin')) || SKINS[0];
-  const name = $<HTMLInputElement>('name');
-  name.value = store.get('name') || '';
-  const skins = $('skins');
-  for (const c of SKINS) {
-    const el = document.createElement('div');
-    el.className = 'skin' + (c === skin ? ' sel' : '');
-    el.style.background = '#' + c.toString(16).padStart(6, '0');
-    el.onclick = () => { skin = c; store.set('skin', String(c)); skins.querySelectorAll('.skin').forEach((s) => s.classList.remove('sel')); el.classList.add('sel'); };
-    skins.appendChild(el);
-  }
-  let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'classic';
-  // Rekorde je Modus (Solo in Promille der Stadt)
-  const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
-  const fmt = (m: Mode, v: number) => (m === 'solo' ? (v / 10).toFixed(1) + ' %' : String(v));
-  const showBest = () => { $('best').textContent = best(mode) ? `Rekord ${MODE_NAMES[mode]}: ${fmt(mode, best(mode))}` : ''; };
-  document.querySelectorAll<HTMLButtonElement>('.mode').forEach((b) => {
-    b.classList.toggle('sel', b.dataset.mode === mode);
-    b.onclick = () => {
-      mode = b.dataset.mode as Mode; store.set('mode', mode);
-      document.querySelectorAll('.mode').forEach((x) => x.classList.toggle('sel', x === b));
-      showBest();
-    };
-  });
-  showBest();
-
-  let wakeLock: { release(): Promise<void> } | null = null;
-  const play = async () => {
-    const n = name.value.trim() || 'Du';
-    store.set('name', name.value.trim());
-    game.setup(n, skin, mode);
-    $('menu').classList.add('hidden');
-    $('over').classList.add('hidden');
-    $('hud').classList.remove('hidden');
-    game.start();
-    try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
+// ---------- Menü (sofort bedienbar, Spiel lädt im Hintergrund) ----------
+let game: Game | null = null;
+let skin = Number(store.get('skin')) || SKINS[0];
+const name = $<HTMLInputElement>('name');
+name.value = store.get('name') || '';
+const skins = $('skins');
+for (const c of SKINS) {
+  const el = document.createElement('div');
+  el.className = 'skin' + (c === skin ? ' sel' : '');
+  el.style.background = '#' + c.toString(16).padStart(6, '0');
+  el.onclick = () => { skin = c; store.set('skin', String(c)); skins.querySelectorAll('.skin').forEach((s) => s.classList.remove('sel')); el.classList.add('sel'); };
+  skins.appendChild(el);
+}
+let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'classic';
+// Rekorde je Modus (Solo in Promille der Stadt)
+const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
+const fmt = (m: Mode, v: number) => (m === 'solo' ? (v / 10).toFixed(1) + ' %' : String(v));
+const showBest = () => { $('best').textContent = best(mode) ? `Rekord ${MODE_NAMES[mode]}: ${fmt(mode, best(mode))}` : ''; };
+document.querySelectorAll<HTMLButtonElement>('.mode').forEach((b) => {
+  b.classList.toggle('sel', b.dataset.mode === mode);
+  b.onclick = () => {
+    mode = b.dataset.mode as Mode; store.set('mode', mode);
+    document.querySelectorAll('.mode').forEach((x) => x.classList.toggle('sel', x === b));
+    showBest();
   };
-  $('play').onclick = play;
-  $('again').onclick = play;
-  $('tomenu').onclick = () => { $('over').classList.add('hidden'); $('menu').classList.remove('hidden'); showBest(); };
-  name.addEventListener('keydown', (e) => { if (e.key === 'Enter') play(); });
+});
+showBest();
 
-  game.onEnd = (r) => {
+// Ton
+let muted = store.get('muted') === '1';
+const applyMute = () => { $('btnmute').textContent = muted ? '🔇' : '🔊'; if (game) game.sfx.muted = muted; };
+$('btnmute').onclick = () => { muted = !muted; store.set('muted', muted ? '1' : '0'); applyMute(); };
+applyMute();
+
+const show = (id: string, on: boolean) => $(id).classList.toggle('hidden', !on);
+
+let wakeLock: { release(): Promise<void> } | null = null;
+const play = async () => {
+  if (!game) return;
+  const n = name.value.trim() || 'Du';
+  store.set('name', name.value.trim());
+  game.setup(n, skin, mode);
+  show('menu', false); show('over', false); show('pause', false); show('hud', true);
+  game.start();
+  try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
+};
+const toMenu = () => {
+  show('over', false); show('pause', false); show('hud', false); show('menu', true);
+  showBest();
+};
+$('play').onclick = play;
+$('again').onclick = play;
+$('tomenu').onclick = toMenu;
+name.addEventListener('keydown', (e) => { if (e.key === 'Enter') play(); });
+
+// Pause
+const pause = (on: boolean) => {
+  if (!game || !game.running) return;
+  game.setPaused(on);
+  show('pause', on);
+};
+$('btnpause').onclick = () => pause(true);
+$('resume').onclick = () => pause(false);
+$('quit').onclick = () => { game?.setPaused(false); game?.demo(); wakeLock?.release().catch(() => {}); wakeLock = null; toMenu(); };
+addEventListener('keydown', (e) => {
+  if (!game?.running) return;
+  if (e.key === 'Escape' || e.key.toLowerCase() === 'p') pause(!game.paused);
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
+
+async function boot() {
+  // Three.js + Physik (Rust -> WebAssembly SIMD) laden, während das Menü schon bedienbar ist
+  const { Game } = await import('./game');
+  const g = new Game($<HTMLCanvasElement>('gl'));
+  game = g;
+  applyMute();
+
+  g.onEnd = (r) => {
     wakeLock?.release().catch(() => {}); wakeLock = null;
     const value = r.mode === 'solo' ? Math.round(r.percent * 1000) : r.score;
     const rec = value > best(r.mode);
@@ -73,19 +102,19 @@ async function boot() {
       }).join('');
     }
     $('overbest').textContent = rec ? `Neuer Rekord: ${fmt(r.mode, value)}!` : `Rekord: ${fmt(r.mode, best(r.mode))}`;
-    setTimeout(() => { $('hud').classList.add('hidden'); $('over').classList.remove('hidden'); showBest(); }, 900);
+    setTimeout(() => { show('hud', false); show('over', true); showBest(); }, 900);
   };
 
-  if (import.meta.env.DEV) (window as any).game = game;
+  if (import.meta.env.DEV) (window as any).game = g;
 
-  // Hintergrund-Demo im Menü
-  game.setup('', SKINS[0]);
-  game.player.die();
-  $('loading').classList.add('hidden');
+  g.demo(); // Hintergrund-Demo im Menü
+  const btn = $<HTMLButtonElement>('play');
+  btn.disabled = false; btn.textContent = 'SPIELEN';
+  $('loadbar').classList.add('done');
 
   let last = performance.now();
   const loop = (now: number) => {
-    game.frame((now - last) / 1000);
+    g.frame((now - last) / 1000);
     last = now;
     requestAnimationFrame(loop);
   };
@@ -97,14 +126,14 @@ let deferred: any = null;
 addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferred = e;
-  $('install').classList.remove('hidden');
+  show('install', true);
 });
 $('install').onclick = async () => {
   if (!deferred) return;
   deferred.prompt();
   await deferred.userChoice;
   deferred = null;
-  $('install').classList.add('hidden');
+  show('install', false);
 };
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(console.error));
@@ -112,7 +141,7 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 
 boot().catch((e) => {
   console.error(e);
-  const p = document.createElement('p');
+  const p = $('loading').querySelector('p')!;
   p.textContent = 'Start fehlgeschlagen – dein Browser unterstützt WebGL2/WebAssembly SIMD nicht. (' + String(e) + ')';
-  $('loading').replaceChildren(p);
+  show('menu', false); show('loading', true);
 });

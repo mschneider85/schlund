@@ -25,9 +25,12 @@
       <div id="levelnum">Lvl 1</div>
       <div id="levelbar"><div id="levelfill"></div></div>
     </div>
+    <div id="hudbtns">
+      <button id="btnpause" class="icon" aria-label="Pause">⏸</button>
+      <button id="btnmute" class="icon" aria-label="Ton an/aus">🔊</button>
+    </div>
     <div id="toast"></div>
     <div id="count"></div>
-    <div id="joy"><div id="knob"></div></div>
   </div>
 
   <div id="menu" class="screen">
@@ -41,7 +44,8 @@
         <button class="mode" data-mode="battle"><b>Battle</b><small>Wer gefressen wird, fliegt raus</small></button>
         <button class="mode" data-mode="solo"><b>Solo</b><small>Friss so viel Stadt wie möglich</small></button>
       </div>
-      <button id="play" class="big">SPIELEN</button>
+      <button id="play" class="big" disabled>LÄDT…</button>
+      <div id="loadbar"><div></div></div>
       <p class="hint">Ziehen / Maus halten oder WASD · 2 Minuten</p>
       <p id="best"></p>
       <button id="install" class="small hidden">📲 Als App installieren</button>
@@ -58,7 +62,15 @@
     </div>
   </div>
 
-  <div id="loading" class="screen"><div class="spinner"></div><p>Lade Physik (WebAssembly)…</p></div>
+  <div id="pause" class="screen hidden">
+    <div class="card">
+      <h2>Pause</h2>
+      <button id="resume" class="big">WEITER</button>
+      <button id="quit" class="small">Runde beenden</button>
+    </div>
+  </div>
+
+  <div id="loading" class="screen hidden"><p></p></div>
 
   <script type="module" src="./src/main.ts"></script>
 </body>

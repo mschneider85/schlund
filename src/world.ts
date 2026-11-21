@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-simd';
 import { TYPES, materials, type ObjType } from './objects';
-import { generateCity, HALF, type Mover } from './city';
+import { generateCity, HALF, ROADS, ROAD_HW, type Mover } from './city';
 
 // ---- Kollisionsgruppen (16 Bit Mitgliedschaft << 16 | 16 Bit Filter) ----
 export const MAX_HOLES = 6;
@@ -36,7 +36,15 @@ const _m = new THREE.Matrix4();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3(1, 1, 1);
 const _up = new THREE.Vector3(0, 1, 0);
+const _q2 = new THREE.Quaternion();
 const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/** Verkehrsteilnehmer nimmt die Fahrt nur wieder auf, wenn er noch (fast) auf seiner Spur steht */
+function canResume(o: Obj, m: Mover) {
+  if (m.kind === 'walk' && !m.axis) return true;
+  const perp = m.axis === 'x' ? o.z : o.x;
+  return Math.abs(perp - m.lane) < 0.8;
+}
 
 export class World {
   physics: RAPIER.World;
@@ -45,6 +53,9 @@ export class World {
   group = new THREE.Group();
   groundTex: THREE.CanvasTexture;
   private dirtyTypes = new Set<number>();
+  /** umgekippte, eingefrorene Objekte, die sich nach kurzer Zeit wieder aufrichten */
+  private righting = new Map<Obj, number>();
+  private time = 0;
   /** Objekte mit aktivem Physikkörper */
   active = new Set<Obj>();
 
@@ -87,7 +98,24 @@ export class World {
       this.meshes[t.id].setColorAt(inst, col.setHex(s.color));
     }
     for (const m of this.meshes) if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    this.collectObstacles();
     this.sync();
+  }
+
+  /** Für frei laufende Fußgänger: feste Hindernisse in der Umgebung merken (Bäume, Bänke, Häuser …) */
+  private collectObstacles() {
+    const statics = this.objs.filter((o) => !o.mover);
+    for (const w of this.objs) {
+      const m = w.mover;
+      if (!m || m.kind !== 'walk' || m.axis) continue;
+      m.obs = [];
+      for (const o of statics) {
+        const d = Math.hypot(o.x - w.homeX, o.z - w.homeZ);
+        // Bäume: nur der Stamm zählt (unter der Krone kann man durch)
+        const r = o.type.name === 'Baum' ? 0.35 : Math.min(o.type.ro, 9);
+        if (d < 9 + r) m.obs.push({ x: o.x, z: o.z, r, o });
+      }
+    }
   }
 
   /**
@@ -108,6 +136,7 @@ export class World {
     o.body = b;
     o.vx = o.vz = 0;
     this.active.add(o);
+    this.righting.delete(o);
   }
 
   /**
@@ -138,10 +167,13 @@ export class World {
     this.active.delete(o);
     o.falling = -1;
     o.dirty = true;
-    // aufrecht stehende Fußgänger/Autos fahren weiter
-    if (o.savedMover && _p.set(0, 1, 0).applyQuaternion(o.q).y > 0.97) {
+    // aufrecht stehende Fußgänger/Autos fahren weiter, umgekippte stellen sich bald wieder auf
+    const upright = _p.set(0, 1, 0).applyQuaternion(o.q).y > 0.97;
+    if (upright && o.savedMover && canResume(o, o.savedMover)) {
       o.mover = o.savedMover; o.savedMover = undefined;
       o.y = o.type.hh;
+    } else if (!upright || Math.abs(o.y - o.type.hh) > 0.2) {
+      this.righting.set(o, this.time + 3.5);
     }
   }
 
@@ -153,16 +185,52 @@ export class World {
     this.dirtyTypes.add(o.type.id);
   }
 
+  /** Ampelphase: welche Achse hat Grün (null = alle rot, Räumzeit) */
+  private green(t: number): 'x' | 'z' | null {
+    const c = t % 16;
+    return c < 6.5 ? 'x' : c < 8 ? null : c < 14.5 ? 'z' : null;
+  }
+
   /** Verkehr & Fußgänger – reine JS-Kinematik, keine Physik nötig */
   updateMovers(dt: number, t: number) {
+    this.time = t;
+    const green = this.green(t);
+    // Autos nach Spur gruppieren (für Abstand zum Vordermann)
+    const lanes = new Map<string, Obj[]>();
+    for (const o of this.objs) {
+      const m = o.mover;
+      if (!o.alive || !m || m.kind !== 'car') continue;
+      const k = m.axis + m.lane;
+      let l = lanes.get(k);
+      if (!l) lanes.set(k, (l = []));
+      l.push(o);
+    }
     for (const o of this.objs) {
       const m = o.mover;
       if (!o.alive || !m) continue;
       if (m.kind === 'car') {
-        const sp = m.dir * m.speed;
+        const along = m.axis === 'x' ? o.x : o.z;
+        const half = o.type.ro * 0.9;
+        let target = m.speed;
+        // rote Ampel: vor der Haltelinie stehen bleiben (wer schon drüber ist, fährt weiter)
+        if (green !== m.axis) {
+          for (const c of ROADS) {
+            const gap = (c - along) * m.dir - (ROAD_HW + 1.6) - half;
+            if (gap > -0.3 && gap < 7) { target = Math.min(target, Math.max(0, gap - 0.2) * 1.5); break; }
+          }
+        }
+        // Abstand zum Vordermann
+        for (const b of lanes.get(m.axis + m.lane)!) {
+          if (b === o) continue;
+          const ba = m.axis === 'x' ? b.x : b.z;
+          const gap = (ba - along) * m.dir - half - b.type.ro * 0.9;
+          if (gap > -0.5 && gap < 8) target = Math.min(target, Math.max(0, gap - 1.5) * 1.6);
+        }
+        const cur = m.cur ?? m.speed;
+        m.cur = cur + Math.max(-14 * dt, Math.min(4 * dt, target - cur));
+        const sp = m.dir * m.cur;
         if (m.axis === 'x') { o.vx = sp; o.vz = 0; o.z = m.lane; } else { o.vz = sp; o.vx = 0; o.x = m.lane; }
         o.x += o.vx * dt; o.z += o.vz * dt;
-        const along = m.axis === 'x' ? o.x : o.z;
         if (m.dir > 0 ? along > HALF - 3 : along < -HALF + 3) {
           if (m.axis === 'x') o.x = -m.dir * (HALF - 3.5); else o.z = -m.dir * (HALF - 3.5);
         }
@@ -178,6 +246,17 @@ export class World {
           const hx = o.homeX - o.x, hz = o.homeZ - o.z;
           if (hx * hx + hz * hz > 49) m.heading = Math.atan2(hx, hz);
           o.vx = Math.sin(m.heading) * m.speed; o.vz = Math.cos(m.heading) * m.speed;
+          // Hindernis voraus? -> abdrehen statt hindurchlaufen
+          const nx = o.x + o.vx * 0.4, nz = o.z + o.vz * 0.4;
+          for (const ob of m.obs ?? []) {
+            if (!(ob.o as Obj).alive || (ob.o as Obj).falling >= 0) continue;
+            const r = ob.r + 0.3;
+            if ((nx - ob.x) ** 2 + (nz - ob.z) ** 2 < r * r) {
+              m.heading = Math.atan2(o.x - ob.x, o.z - ob.z) + (Math.random() - 0.5) * 1.6;
+              o.vx = Math.sin(m.heading) * m.speed; o.vz = Math.cos(m.heading) * m.speed;
+              break;
+            }
+          }
         }
         o.x += o.vx * dt; o.z += o.vz * dt;
         // Watschelgang
@@ -186,6 +265,30 @@ export class World {
         o.y = o.type.hh + Math.abs(Math.sin(t * 9 + o.inst)) * 0.06;
       }
       o.dirty = true;
+    }
+    this.updateRighting(dt);
+  }
+
+  /** Umgekippte Objekte richten sich langsam wieder auf (mit kleinem Hüpfer) */
+  private updateRighting(dt: number) {
+    for (const [o, at] of this.righting) {
+      if (!o.alive || o.body) { this.righting.delete(o); continue; }
+      if (this.time < at) continue;
+      // Gierwinkel aus der aktuellen Lage, dann Richtung aufrecht drehen
+      const f = _p.set(1, 0, 0).applyQuaternion(o.q);
+      const yaw = Math.hypot(f.x, f.z) > 0.3 ? Math.atan2(-f.z, f.x)
+        : Math.atan2(_p.set(0, 0, 1).applyQuaternion(o.q).x, _p.z);
+      const target = _q2.setFromAxisAngle(_up, yaw);
+      const k = Math.min(1, dt * 6);
+      o.q.slerp(target, k);
+      const lift = Math.sin(Math.min(1, (this.time - at) * 2) * Math.PI) * 0.6;
+      o.y += (o.type.hh + lift - o.y) * k;
+      o.dirty = true;
+      if (o.q.angleTo(target) < 0.02 && this.time - at > 0.6) {
+        o.q.copy(target); o.y = o.type.hh;
+        this.righting.delete(o);
+        if (o.savedMover && canResume(o, o.savedMover)) { o.mover = o.savedMover; o.savedMover = undefined; }
+      }
     }
   }
 

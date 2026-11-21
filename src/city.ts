@@ -7,8 +7,8 @@ export const ROAD_HW = 4.5; // halbe Fahrbahnbreite
 export const WALK_HW = 6.5; // inkl. Gehweg
 
 export type Mover =
-  | { kind: 'car'; axis: 'x' | 'z'; dir: 1 | -1; speed: number; lane: number }
-  | { kind: 'walk'; axis: 'x' | 'z' | null; dir: 1 | -1; speed: number; lane: number; heading: number; min: number; max: number };
+  | { kind: 'car'; axis: 'x' | 'z'; dir: 1 | -1; speed: number; lane: number; cur?: number }
+  | { kind: 'walk'; axis: 'x' | 'z' | null; dir: 1 | -1; speed: number; lane: number; heading: number; min: number; max: number; obs?: { x: number; z: number; r: number; o: object }[] };
 
 export interface Spawn {
   type: ObjType;
@@ -134,7 +134,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
           else if (r < 0.065) add(T.bench, ...at(t, side * 5.9), rotAlong + (side > 0 ? Math.PI : 0));
           else if (r < 0.085) add(T.tree, ...at(t, side * 5.6));
           if (R() < 0.07) {
-            const lane = c + side * (5 + R() * 0.6);
+            const lane = c + side * (4.85 + R() * 0.3);
             const dir = R() < 0.5 ? 1 : -1;
             const [x, z] = at(t, lane - c);
             add(T.person, x, z, 0, { kind: 'walk', axis, dir, speed: 1.1 + R() * 0.8, lane, heading: 0, min: -HALF + 2, max: HALF - 2 });

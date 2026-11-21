@@ -4,10 +4,9 @@ import { Hole } from './hole';
 import { HALF } from './city';
 import { Sfx } from './sfx';
 import { xray } from './objects';
+import { SKINS, escapeHtml, type Mode } from './config';
 
 export const ROUND_TIME = 120;
-export type Mode = 'classic' | 'battle' | 'solo';
-export const MODE_NAMES: Record<Mode, string> = { classic: 'Klassik', battle: 'Battle', solo: 'Solo' };
 
 export interface Result {
   mode: Mode;
@@ -19,7 +18,6 @@ export interface Result {
   eliminated: boolean;
 }
 const BOT_NAMES = ['Gulpi', 'NomNom', 'Krater', 'Vortex', 'Mampfred', 'Abgrund', 'Strudel', 'Bodenlos', 'Schlucki', 'Tiefgang', 'Blackie', 'Gully'];
-export const SKINS = [0xff5caa, 0x4cc9f0, 0xffd250, 0x7bf06c, 0xb77cff, 0xff8a4c, 0xffffff];
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -58,7 +56,10 @@ export class Game {
   sfx = new Sfx();
 
   running = false;
+  paused = false;
   mode: Mode = 'classic';
+  /** wie viel größer ein Loch sein muss, um ein anderes zu fressen */
+  get eatRatio() { return this.mode === 'battle' ? 1.1 : 1.2; }
   /** Sekunden bis zum Start (3-2-1) */
   countdown = 0;
   timeLeft = ROUND_TIME;
@@ -71,7 +72,8 @@ export class Game {
   camH = 20;
   // Eingabe
   keys = new Set<string>();
-  joy: { id: number; sx: number; sy: number; dx: number; dy: number } | null = null;
+  /** aktiver Zeiger: Touch = Wischen relativ zum (mitwandernden) Ankerpunkt, Maus = zum Zeiger hin */
+  ptr: { id: number; touch: boolean; ax: number; ay: number; x: number; y: number } | null = null;
   onEnd: (r: Result) => void = () => {};
   private boardT = 0;
   private toastT = 0;
@@ -81,18 +83,41 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.scene.background = new THREE.Color(0xa7d8f5);
-    this.scene.fog = new THREE.Fog(0xa7d8f5, 150, 420);
+    this.scene.background = new THREE.Color(0x8fcbef);
+    this.scene.fog = new THREE.Fog(0x8fcbef, 150, 420);
     this.scene.add(new THREE.HemisphereLight(0xdff1ff, 0x8a7a68, 1.5));
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.03;
     this.scene.add(this.sun, this.sun.target);
-    // Umland außerhalb der Karte
-    const outer = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400).rotateX(-Math.PI / 2), groundMaterial(this.holeUniforms, { color: 0x7cc35d }));
-    outer.position.y = -0.05;
-    this.scene.add(outer);
+    // Die Stadt ist eine Insel: Wasser ringsum (mit Loch-Ausschnitt, falls es unter der Karte sichtbar wäre)
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400).rotateX(-Math.PI / 2),
+      groundMaterial(this.holeUniforms, { color: 0x3f9fd8 }));
+    water.position.y = -1.2;
+    this.scene.add(water);
+    // Kaimauer an der Inselkante
+    const quayMat = new THREE.MeshLambertMaterial({ color: 0xcfc6b4 });
+    const capMat = new THREE.MeshLambertMaterial({ color: 0xe9e2d2 });
+    for (const [x, z, w, d] of [[0, -HALF, HALF * 2 + 1.2, 0.6], [0, HALF, HALF * 2 + 1.2, 0.6], [-HALF, 0, 0.6, HALF * 2], [HALF, 0, 0.6, HALF * 2]]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 1.5, d), quayMat);
+      wall.position.set(x, -0.74, z);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.2, 0.25, d + 0.2), capMat);
+      cap.position.set(x, 0.1, z);
+      cap.castShadow = true;
+      this.scene.add(wall, cap);
+    }
+    // ein paar Wellen-Glanzlichter auf dem Wasser
+    const glint = new THREE.MeshBasicMaterial({ color: 0x9fd6f5, transparent: true, opacity: 0.6 });
+    const gGeo = new THREE.PlaneGeometry(3, 0.25).rotateX(-Math.PI / 2);
+    for (let i = 0; i < 160; i++) {
+      const a = Math.random() * Math.PI * 2, r = HALF + 6 + Math.random() * 160;
+      const m = new THREE.Mesh(gGeo, glint);
+      m.position.set(Math.cos(a) * r * 1.1, -1.18, Math.sin(a) * r * 1.1);
+      if (Math.abs(m.position.x) < HALF + 3 && Math.abs(m.position.z) < HALF + 3) continue;
+      m.scale.x = 0.5 + Math.random();
+      this.scene.add(m);
+    }
     addEventListener('resize', () => this.resize());
     this.resize();
     this.bindInput();
@@ -127,7 +152,8 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const me = i === 0;
       const h = new Hole(i, me ? playerName : names[i - 1], me ? skin : colors[(i - 1) % colors.length], me, this.world.physics, this.scene);
-      h.skill = 0.82 + Math.random() * 0.18;
+      // im Battle stärker gestreute Bot-Stärke -> Größenunterschiede -> Duelle
+      h.skill = mode === 'battle' ? 0.68 + Math.random() * 0.32 : 0.82 + Math.random() * 0.18;
       const [x, z] = this.spawnPoint(h);
       h.respawn(x, z, 0);
       this.holes.push(h);
@@ -177,34 +203,24 @@ export class Game {
   private bindInput() {
     addEventListener('keydown', (e) => this.keys.add(e.key.toLowerCase()));
     addEventListener('keyup', (e) => this.keys.delete(e.key.toLowerCase()));
-    addEventListener('blur', () => this.keys.clear());
+    addEventListener('blur', () => { this.keys.clear(); this.ptr = null; });
     const cv = this.renderer.domElement;
-    const joyEl = $('joy'), knob = $('knob');
     cv.addEventListener('pointerdown', (e) => {
-      if (this.joy) return;
-      this.joy = { id: e.pointerId, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0 };
+      if (this.ptr) return;
+      this.ptr = { id: e.pointerId, touch: e.pointerType !== 'mouse', ax: e.clientX, ay: e.clientY, x: e.clientX, y: e.clientY };
       cv.setPointerCapture(e.pointerId);
-      joyEl.style.display = 'block';
-      joyEl.style.left = e.clientX + 'px'; joyEl.style.top = e.clientY + 'px';
-      knob.style.transform = '';
     });
     cv.addEventListener('pointermove', (e) => {
-      if (!this.joy || e.pointerId !== this.joy.id) return;
-      let dx = e.clientX - this.joy.sx, dy = e.clientY - this.joy.sy;
-      const len = Math.hypot(dx, dy), max = 50;
-      if (len > max) {
-        // Joystick wandert mit, damit Richtungswechsel sofort greifen
-        this.joy.sx += (dx / len) * (len - max); this.joy.sy += (dy / len) * (len - max);
-        dx = (dx / len) * max; dy = (dy / len) * max;
-        joyEl.style.left = this.joy.sx + 'px'; joyEl.style.top = this.joy.sy + 'px';
+      const p = this.ptr;
+      if (!p || e.pointerId !== p.id) return;
+      p.x = e.clientX; p.y = e.clientY;
+      if (p.touch) {
+        // Anker zieht hinterher -> Richtungswechsel greifen sofort, ohne weit zurückwischen zu müssen
+        const dx = p.x - p.ax, dy = p.y - p.ay, len = Math.hypot(dx, dy), max = 24;
+        if (len > max) { p.ax += (dx / len) * (len - max); p.ay += (dy / len) * (len - max); }
       }
-      this.joy.dx = dx / max; this.joy.dy = dy / max;
-      knob.style.transform = `translate(${dx}px, ${dy}px)`;
     });
-    const up = (e: PointerEvent) => {
-      if (!this.joy || e.pointerId !== this.joy.id) return;
-      this.joy = null; joyEl.style.display = 'none';
-    };
+    const up = (e: PointerEvent) => { if (this.ptr && e.pointerId === this.ptr.id) this.ptr = null; };
     cv.addEventListener('pointerup', up);
     cv.addEventListener('pointercancel', up);
   }
@@ -216,10 +232,22 @@ export class Game {
     if (k.has('s') || k.has('arrowdown')) dz += 1;
     if (k.has('a') || k.has('arrowleft')) dx -= 1;
     if (k.has('d') || k.has('arrowright')) dx += 1;
-    if (this.joy) { dx += this.joy.dx; dz += this.joy.dy; }
-    // konstantes Tempo: nur die Richtung zählt (mit kleiner Totzone)
+    const p = this.ptr;
+    let dead = 0.15;
+    if (p && p.touch) {
+      dx += p.x - p.ax; dz += p.y - p.ay; dead = 8; // Pixel
+    } else if (p) {
+      // Maus: Richtung vom Loch (auf dem Bildschirm) zum Zeiger, Stillstand über dem Loch
+      const h = this.player;
+      this._v.set(h.x, 0, h.z).project(this.camera);
+      const sx = (this._v.x * 0.5 + 0.5) * innerWidth, sy = (-this._v.y * 0.5 + 0.5) * innerHeight;
+      this._v.set(h.x + h.r, 0, h.z).project(this.camera);
+      const rpx = Math.abs((this._v.x * 0.5 + 0.5) * innerWidth - sx);
+      dx += p.x - sx; dz += p.y - sy; dead = Math.max(12, rpx * 0.5);
+    }
+    // konstantes Tempo: nur die Richtung zählt
     const l = Math.hypot(dx, dz);
-    if (l < 0.15) { dx = 0; dz = 0; } else { dx /= l; dz /= l; }
+    if (l < dead) { dx = 0; dz = 0; } else { dx /= l; dz /= l; }
     this.player.dirX = dx; this.player.dirZ = dz;
   }
 
@@ -233,13 +261,13 @@ export class Game {
     for (const o of this.holes) {
       if (o === h || !o.alive) continue;
       const d = Math.hypot(o.x - h.x, o.z - h.z);
-      if (o.r > h.r * 1.15 && d < o.r + 14) { fx += (h.x - o.x) / (d + 0.1); fz += (h.z - o.z) / (d + 0.1); }
+      if (o.r > h.r * this.eatRatio * 0.95 && d < o.r + 14) { fx += (h.x - o.x) / (d + 0.1); fz += (h.z - o.z) / (d + 0.1); }
     }
     if (fx || fz) { h.tx = h.x + fx * 20; h.tz = h.z + fz * 20; this.steer(h); return; }
     // 2) Beute: kleinere Löcher
     let best = 0, bx = 0, bz = 0;
     for (const o of this.holes) {
-      if (o === h || !o.alive || h.r < o.r * 1.25) continue;
+      if (o === h || !o.alive || h.r < o.r * (this.eatRatio + 0.05)) continue;
       const d = Math.hypot(o.x - h.x, o.z - h.z);
       // im Battle jagen Bots weiter und lieber
       const range = this.mode === 'battle' ? 70 : 30, lure = this.mode === 'battle' ? 120 : 40;
@@ -298,7 +326,7 @@ export class Game {
     for (const a of this.holes) {
       if (!a.alive) continue;
       for (const b of this.holes) {
-        if (a === b || !b.alive || a.r < b.r * 1.2) continue;
+        if (a === b || !b.alive || a.r < b.r * this.eatRatio) continue;
         const d = Math.hypot(a.x - b.x, a.z - b.z);
         if (d < a.r - b.r * 0.4) this.eatHole(a, b);
       }
@@ -353,8 +381,24 @@ export class Game {
   }
 
   // ---------------- Frame ----------------
+  /** Hintergrund-Demo fürs Menü: Bots spielen, kein Spieler */
+  demo() {
+    this.running = false;
+    this.paused = false;
+    this.setup('', SKINS[0]);
+    this.player.die();
+  }
+
+  setPaused(p: boolean) {
+    if (!this.running) p = false;
+    this.paused = p;
+    this.ptr = null;
+    this.keys.clear();
+  }
+
   frame(dt: number) {
     dt = Math.min(dt, 0.1);
+    if (this.paused) { this.renderer.render(this.scene, this.camera); return; }
     this.t += dt;
     if (this.running && this.countdown > 0) {
       const before = Math.ceil(this.countdown);
@@ -394,6 +438,12 @@ export class Game {
       this.swallow(dt);
     }
     if (!this.world) return;
+    // Gefahr/Beute relativ zum Spieler markieren
+    const pl = this.player;
+    for (const h of this.holes) {
+      if (h === pl) continue;
+      h.threat = !pl.alive || !this.running ? 0 : h.r >= pl.r * this.eatRatio ? 1 : pl.r >= h.r * this.eatRatio ? -1 : 0;
+    }
     for (let i = 0; i < MAX_HOLES; i++) {
       const h = this.holes[i];
       this.holeUniforms[i].set(h?.x ?? 0, h?.z ?? 0, h?.r ?? 0, h?.visible ? 1 : 0);
@@ -484,7 +534,10 @@ export class Game {
       if (this.mode === 'solo') {
         $('board').innerHTML = `<li class="me"><span class="n">Stadt gefressen</span><span class="s">${this.percentText()}</span></li>`;
       } else {
+        // schmale Bildschirme: nur Top 3 + eigene Zeile
+        const compact = innerWidth < 600;
         $('board').innerHTML = this.ranking().map((h, i) => {
+          if (compact && i >= 3 && !h.isPlayer) return '';
           const out = this.mode === 'battle' && !h.alive;
           return `<li class="${h.isPlayer ? 'me' : ''}${out ? ' out' : ''}"><span>${i + 1}.</span><span class="dot" style="background:#${h.color.toString(16).padStart(6, '0')}"></span><span class="n">${escapeHtml(h.name)}</span><span class="s">${out ? '💀' : h.score}</span></li>`;
         }).join('');
@@ -504,8 +557,7 @@ export class Game {
 
   private finish() {
     this.running = false;
-    this.joy = null;
-    $('joy').style.display = 'none';
+    this.ptr = null;
     $('count').classList.remove('go');
     const table = this.ranking();
     const rank = table.indexOf(this.player) + 1;
@@ -514,7 +566,4 @@ export class Game {
   }
 }
 
-export function escapeHtml(s: string) {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-}
 

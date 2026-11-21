@@ -17,6 +17,7 @@ const pitMat = new THREE.ShaderMaterial({
   }`,
 });
 const rimGeo = new THREE.RingGeometry(1, 1.06, 72).rotateX(-Math.PI / 2);
+const threatGeo = new THREE.RingGeometry(1.1, 1.24, 72).rotateX(-Math.PI / 2);
 const progGeo = new THREE.RingGeometry(1.1, 1.2, 96).rotateX(-Math.PI / 2);
 // Richtungspfeil (Chevron), zeigt in Ruhelage nach -z
 const arrowShape = new THREE.Shape();
@@ -50,6 +51,10 @@ export class Hole {
   private prog?: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private arrow?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private arrowA = 0;
+  /** Markierung gegenüber dem Spieler: 1 = gefährlich (rot), -1 = Beute (grün), 0 = neutral */
+  threat = 0;
+  private threatRing?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  private t = 0;
   label: HTMLDivElement;
   // KI
   aiT = 0; tx = 0; tz = 0; skill = 1;
@@ -82,6 +87,11 @@ export class Hole {
       this.arrow = new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
       this.arrow.position.y = 0.06;
       this.group.add(this.prog, this.arrow);
+    }
+    if (!isPlayer) {
+      this.threatRing = new THREE.Mesh(threatGeo, new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0, depthWrite: false }));
+      this.threatRing.position.y = 0.05;
+      this.group.add(this.threatRing);
     }
     scene.add(this.group);
     this.label = document.createElement('div');
@@ -143,7 +153,15 @@ export class Hole {
   }
 
   private applyVisuals() {
+    this.t += 1 / 60;
     this.group.position.set(this.x, 0, this.z);
+    if (this.threatRing) {
+      const m = this.threatRing.material;
+      if (this.threat) m.color.setHex(this.threat > 0 ? 0xff3b3b : 0x5dff7a);
+      const target = this.threat && this.alive ? 0.55 + Math.sin(this.t * 7) * 0.3 : 0;
+      m.opacity += (target - m.opacity) * 0.2;
+      this.threatRing.scale.setScalar(this.r);
+    }
     this.pit.scale.set(this.r, this.depth, this.r);
     const p = 1 + Math.sin(this.pulse * Math.PI) * 0.12;
     this.rim.scale.setScalar(this.r * p);
