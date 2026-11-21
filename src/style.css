@@ -32,6 +32,7 @@ html, body {
 #board li .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
 #board li .s { font-variant-numeric: tabular-nums; opacity: .9; }
 #board li.me { color: #ffe066; }
+#board li.out { opacity: .45; text-decoration: line-through; }
 #board li .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; flex: none; }
 
 #levelbox {
@@ -115,3 +116,39 @@ button.small { margin-top: 14px; padding: 10px 16px; background: rgba(255,255,25
   #timer { font-size: 22px; top: calc(60px + env(safe-area-inset-top)); }
   h1 { font-size: 42px; }
 }
+
+/* Countdown */
+#count {
+  position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%) scale(0);
+  font-size: 120px; font-weight: 900; color: #fff; opacity: 0;
+  text-shadow: 0 6px 0 rgba(0,0,0,.25), 0 0 30px rgba(255, 92, 170, .6);
+}
+#count.go { animation: count 1s ease-out forwards; }
+@keyframes count {
+  0% { transform: translate(-50%, -50%) scale(2.2); opacity: 0; }
+  20% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  75% { opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(.8); opacity: 0; }
+}
+
+/* Punkte-Popups */
+.pop {
+  position: absolute; transform: translate(-50%, -100%); font-weight: 900; font-size: 20px; color: #fff;
+  text-shadow: 0 2px 4px rgba(0,0,0,.6); animation: pop .9s ease-out forwards; pointer-events: none;
+}
+.pop.big { font-size: 30px; color: #ffe066; }
+@keyframes pop {
+  0% { opacity: 0; transform: translate(-50%, -60%) scale(.6); }
+  15% { opacity: 1; transform: translate(-50%, -100%) scale(1.15); }
+  100% { opacity: 0; transform: translate(-50%, -260%) scale(1); }
+}
+
+/* Modusauswahl */
+#modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+.mode {
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 6px; border-radius: 14px;
+  background: rgba(255,255,255,.07); border: 2px solid transparent; font-weight: 700;
+}
+.mode b { font-size: 16px; }
+.mode small { font-size: 11px; opacity: .7; font-weight: 600; line-height: 1.25; }
+.mode.sel { border-color: #ff5caa; background: rgba(255, 92, 170, .15); }

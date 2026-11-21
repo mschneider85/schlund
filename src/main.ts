@@ -8,7 +8,8 @@ const store = {
 
 async function boot() {
   // dynamisch, damit ein fehlendes WebAssembly-SIMD sauber gemeldet werden kann
-  const { Game, SKINS, escapeHtml } = await import('./game');
+  const { Game, SKINS, MODE_NAMES, escapeHtml } = await import('./game');
+  type Mode = keyof typeof MODE_NAMES;
   // Physik: Rapier (Rust -> WebAssembly SIMD), wird per ESM-Integration geladen
   const game = new Game($<HTMLCanvasElement>('gl'));
 
@@ -24,15 +25,26 @@ async function boot() {
     el.onclick = () => { skin = c; store.set('skin', String(c)); skins.querySelectorAll('.skin').forEach((s) => s.classList.remove('sel')); el.classList.add('sel'); };
     skins.appendChild(el);
   }
-  const best = () => Number(store.get('best')) || 0;
-  const showBest = () => { $('best').textContent = best() ? `Rekord: ${best()}` : ''; };
+  let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'classic';
+  // Rekorde je Modus (Solo in Promille der Stadt)
+  const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
+  const fmt = (m: Mode, v: number) => (m === 'solo' ? (v / 10).toFixed(1) + ' %' : String(v));
+  const showBest = () => { $('best').textContent = best(mode) ? `Rekord ${MODE_NAMES[mode]}: ${fmt(mode, best(mode))}` : ''; };
+  document.querySelectorAll<HTMLButtonElement>('.mode').forEach((b) => {
+    b.classList.toggle('sel', b.dataset.mode === mode);
+    b.onclick = () => {
+      mode = b.dataset.mode as Mode; store.set('mode', mode);
+      document.querySelectorAll('.mode').forEach((x) => x.classList.toggle('sel', x === b));
+      showBest();
+    };
+  });
   showBest();
 
   let wakeLock: { release(): Promise<void> } | null = null;
   const play = async () => {
     const n = name.value.trim() || 'Du';
     store.set('name', name.value.trim());
-    game.setup(n, skin);
+    game.setup(n, skin, mode);
     $('menu').classList.add('hidden');
     $('over').classList.add('hidden');
     $('hud').classList.remove('hidden');
@@ -41,16 +53,26 @@ async function boot() {
   };
   $('play').onclick = play;
   $('again').onclick = play;
+  $('tomenu').onclick = () => { $('over').classList.add('hidden'); $('menu').classList.remove('hidden'); showBest(); };
   name.addEventListener('keydown', (e) => { if (e.key === 'Enter') play(); });
 
-  game.onEnd = (rank, score, table) => {
+  game.onEnd = (r) => {
     wakeLock?.release().catch(() => {}); wakeLock = null;
-    const rec = score > best();
-    if (rec) store.set('best', String(score));
-    $('overtitle').textContent = rank === 1 ? '🏆 Du hast gewonnen!' : `Platz ${rank}`;
-    $('results').innerHTML = table.map((h, i) =>
-      `<li class="${h.isPlayer ? 'me' : ''}"><span>${i + 1}.</span><span class="n">${escapeHtml(h.name)}</span><span>${h.score}</span></li>`).join('');
-    $('overbest').textContent = rec ? `Neuer Rekord: ${score}!` : `Rekord: ${best()}`;
+    const value = r.mode === 'solo' ? Math.round(r.percent * 1000) : r.score;
+    const rec = value > best(r.mode);
+    if (rec) store.set('best-' + r.mode, String(value));
+    if (r.mode === 'solo') {
+      $('overtitle').textContent = `${(r.percent * 100).toFixed(1)} % der Stadt!`;
+      $('results').innerHTML = `<li class="me"><span class="n">Punkte</span><span>${r.score}</span></li>`;
+    } else {
+      $('overtitle').textContent = r.mode === 'battle' && r.eliminated ? `Gefressen – Platz ${r.rank}`
+        : r.rank === 1 ? '🏆 Du hast gewonnen!' : `Platz ${r.rank}`;
+      $('results').innerHTML = r.table.map((h, i) => {
+        const out = r.mode === 'battle' && !h.alive;
+        return `<li class="${h.isPlayer ? 'me' : ''}"><span>${i + 1}.</span><span class="n">${escapeHtml(h.name)}${out ? ' 💀' : ''}</span><span>${h.score}</span></li>`;
+      }).join('');
+    }
+    $('overbest').textContent = rec ? `Neuer Rekord: ${fmt(r.mode, value)}!` : `Rekord: ${fmt(r.mode, best(r.mode))}`;
     setTimeout(() => { $('hud').classList.add('hidden'); $('over').classList.remove('hidden'); showBest(); }, 900);
   };
 

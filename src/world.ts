@@ -11,7 +11,6 @@ export const gFall = (i: number) => 1 << (2 + 2 * i);
 export const gPit = (i: number) => 1 << (3 + 2 * i);
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 
-const GROUPS_OBJ = groups(G_OBJ, G_GROUND | G_OBJ);
 const groupsFalling = (i: number) => groups(gFall(i), gFall(i) | gPit(i));
 
 export interface Obj {
@@ -20,9 +19,11 @@ export interface Obj {
   /** Physikkörper – existiert erst, sobald das Objekt in ein Loch kippt */
   body: RAPIER.RigidBody | null;
   alive: boolean;
-  /** Index des Lochs, in das das Objekt gerade fällt, sonst -1 */
+  /** Index des Lochs, dem das Objekt gerade (physikalisch) zugeordnet ist, sonst -1 */
   falling: number;
   mover?: Mover;
+  /** Bewegungsmuster, das nach dem Deaktivieren wiederhergestellt wird */
+  savedMover?: Mover;
   homeX: number; homeZ: number;
   x: number; y: number; z: number;
   /** Rotation (Quaternion) */
@@ -45,7 +46,7 @@ export class World {
   groundTex: THREE.CanvasTexture;
   private dirtyTypes = new Set<number>();
   /** Objekte mit aktivem Physikkörper */
-  private active = new Set<Obj>();
+  active = new Set<Obj>();
 
   constructor(seed: number) {
     this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -89,34 +90,59 @@ export class World {
     this.sync();
   }
 
-  /** Objekt beginnt in Loch i zu fallen: jetzt erst wird es ein dynamischer Rapier-Körper */
-  startFalling(o: Obj, i: number, hx: number, hz: number) {
+  /**
+   * Objekt kommt in die Nähe von Loch i: ab jetzt ein dynamischer Rapier-Körper, der nur noch
+   * mit dem Bodenring und der Grube dieses Lochs kollidiert. Ob es hineinfällt, entscheidet die Physik.
+   */
+  activate(o: Obj, i: number) {
     o.falling = i;
-    o.mover = undefined;
+    if (o.mover) { o.savedMover = o.mover; o.mover = undefined; }
     const b = this.physics.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(o.x, o.y, o.z)
       .setRotation({ x: o.q.x, y: o.q.y, z: o.q.z, w: o.q.w })
-      .setLinvel(o.vx, 0, o.vz)
-      .setGravityScale(2.6)
-      .setLinearDamping(0.1).setAngularDamping(0.3)
+      .setLinvel(o.vx * 0.5, 0, o.vz * 0.5)
+      .setGravityScale(1.8)
+      .setLinearDamping(0.6).setAngularDamping(0.4)
       .setCcdEnabled(o.type.ro < 0.5));
     for (const cd of o.type.colliders()) this.physics.createCollider(cd.setCollisionGroups(groupsFalling(i)), b);
     o.body = b;
+    o.vx = o.vz = 0;
     this.active.add(o);
-    // leichter Sog in Richtung Lochmitte -> Kippen über die Kante
-    const m = b.mass();
-    const dx = hx - o.x, dz = hz - o.z, d = Math.hypot(dx, dz) || 1;
-    b.applyImpulse({ x: (dx / d) * m * 1.2, y: -m * 1.5, z: (dz / d) * m * 1.2 }, true);
-    b.applyTorqueImpulse({ x: (dz / d) * m * 0.4, y: 0, z: (-dx / d) * m * 0.4 }, true);
   }
 
-  /** Fallen abbrechen (Loch ist weggefahren, bevor das Objekt versank) – bleibt normal simuliert */
-  stopFalling(o: Obj) {
-    o.falling = -1;
+  /**
+   * Sog: passende Objekte über bzw. an der Kante werden sanft zur Mitte und nach unten gezogen,
+   * damit sie zügig über die Kante kippen statt auf dem Rand zu balancieren.
+   */
+  suction(holes: { x: number; z: number; r: number; alive: boolean }[], dt: number) {
+    for (const o of this.active) {
+      const h = holes[o.falling], b = o.body;
+      if (!h || !h.alive || !b || o.type.ro > h.r * 0.95) continue;
+      const dx = h.x - o.x, dz = h.z - o.z, d = Math.hypot(dx, dz) || 1;
+      if (d > h.r + o.type.ro * 0.6) continue;
+      const m = b.mass(), a = 7 * dt * m;
+      b.applyImpulse({ x: (dx / d) * a, y: o.y > -0.5 ? -a * 0.8 : 0, z: (dz / d) * a }, true);
+    }
+  }
+
+  /** Loch hat sich entfernt: Objekt wieder einfrieren (kostet dann keine Physik mehr) */
+  deactivate(o: Obj) {
     const b = o.body;
-    if (!b) return;
-    for (let k = 0; k < b.numColliders(); k++) b.collider(k).setCollisionGroups(GROUPS_OBJ);
-    b.setGravityScale(1, true);
+    if (b) {
+      const p = b.translation(), r = b.rotation();
+      o.x = p.x; o.y = Math.max(p.y, 0.05); o.z = p.z;
+      o.q.set(r.x, r.y, r.z, r.w);
+      this.physics.removeRigidBody(b);
+      o.body = null;
+    }
+    this.active.delete(o);
+    o.falling = -1;
+    o.dirty = true;
+    // aufrecht stehende Fußgänger/Autos fahren weiter
+    if (o.savedMover && _p.set(0, 1, 0).applyQuaternion(o.q).y > 0.97) {
+      o.mover = o.savedMover; o.savedMover = undefined;
+      o.y = o.type.hh;
+    }
   }
 
   remove(o: Obj) {

@@ -45,6 +45,9 @@ export class Sfx {
     [523, 659, 784, 1047].forEach((f, i) => this.tone('triangle', f, f, 0.14, 0.22, i * 0.07));
   }
 
+  /** Countdown-Ton; `go` = Startsignal */
+  tick(go: boolean) { this.tone('square', go ? 880 : 440, go ? 880 : 440, go ? 0.35 : 0.12, 0.15); }
+
   hurt() { this.tone('sawtooth', 300, 60, 0.6, 0.3); }
 
   end(win: boolean) {

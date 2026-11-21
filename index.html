@@ -26,6 +26,7 @@
       <div id="levelbar"><div id="levelfill"></div></div>
     </div>
     <div id="toast"></div>
+    <div id="count"></div>
     <div id="joy"><div id="knob"></div></div>
   </div>
 
@@ -35,8 +36,13 @@
       <p class="sub">Friss die Stadt. Werde größer. Friss die anderen.</p>
       <input id="name" maxlength="14" placeholder="Dein Name" autocomplete="off" />
       <div id="skins"></div>
+      <div id="modes">
+        <button class="mode sel" data-mode="classic"><b>Klassik</b><small>Größtes Loch gewinnt</small></button>
+        <button class="mode" data-mode="battle"><b>Battle</b><small>Wer gefressen wird, fliegt raus</small></button>
+        <button class="mode" data-mode="solo"><b>Solo</b><small>Friss so viel Stadt wie möglich</small></button>
+      </div>
       <button id="play" class="big">SPIELEN</button>
-      <p class="hint">Ziehen / Maus halten oder WASD · 2 Minuten · größtes Loch gewinnt</p>
+      <p class="hint">Ziehen / Maus halten oder WASD · 2 Minuten</p>
       <p id="best"></p>
       <button id="install" class="small hidden">📲 Als App installieren</button>
     </div>
@@ -48,6 +54,7 @@
       <ol id="results"></ol>
       <p id="overbest"></p>
       <button id="again" class="big">NOCHMAL</button>
+      <button id="tomenu" class="small">Zum Menü</button>
     </div>
   </div>
 
