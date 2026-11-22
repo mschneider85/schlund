@@ -13,6 +13,11 @@ const store = {
 let game: Game | null = null;
 const name = $<HTMLInputElement>('name');
 name.value = store.get('name') || '';
+// ohne eingegebenen Namen: zufälliger, pro Gerät fester Name (statt "Du" – den sähen ja auch die anderen)
+const AUTO = ['Schlinger', 'Futterloch', 'Happs', 'Krümel', 'Mampfer', 'Schluckauf', 'Gierschlund', 'Nimmersatt', 'Plumps', 'Wirbel'];
+const autoName = store.get('autoname') || AUTO[Math.floor(Math.random() * AUTO.length)] + (10 + Math.floor(Math.random() * 90));
+store.set('autoname', autoName);
+name.placeholder = autoName;
 let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'battle';
 // Rekorde je Modus (Solo in Promille der Stadt)
 const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
@@ -41,7 +46,7 @@ let starting = false;
 const play = async () => {
   if (!game || starting) return;
   starting = true;
-  const n = name.value.trim() || 'Du';
+  const n = name.value.trim() || autoName;
   store.set('name', name.value.trim());
   // Battle: still nach einer laufenden Runde echter Spieler suchen, sonst selbst eine eröffnen
   const net = mode === 'battle' ? game.net : null;
