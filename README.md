@@ -18,6 +18,8 @@ npm run preview   # Build lokal testen (PWA/Offline nur hier)
   Wer eine Runde startet, ist Host (Physik, Bots, Punkte); später Kommende übernehmen still ein Bot-Loch.
   Das eigene Loch bewegt sich lokal ohne Verzögerung, Verkehr und fremde Löcher werden interpoliert.
   Geht der Host, übernimmt ein anderer Spieler nahtlos; ohne Verbindung spielt man einfach gegen Bots.
+  Klappt keine Direktverbindung (Mobilfunk-/Firmen-NAT), laufen die Nachrichten AES-verschlüsselt über öffentliche
+  MQTT-Broker (eigener Mini-Client, `src/mqtt.ts`) – ohne Registrierung. Diagnose: Seite mit `?debug` öffnen.
 - **PWA** – Manifest, Service Worker mit beim Build erzeugter Precache-Liste (komplett offline spielbar), Install-Button.
 - Web Audio (synthetische Sounds), Vibration API, Screen Wake Lock, Pointer Events (Touch-Steuerung), WASD/Pfeiltasten.
 
@@ -29,5 +31,6 @@ npm run preview   # Build lokal testen (PWA/Offline nur hier)
 | `src/world.ts` | Physikwelt, Objektzustand, Verkehr, Instanz-Sync |
 | `src/hole.ts` | Loch: Level/Wachstum, Grubenwände, Darstellung |
 | `src/game.ts` | Spielschleife, Kamera, Eingabe, Bot-KI, HUD |
-| `src/net.ts` | Mehrspieler: Matchmaking, Host/Client-Protokoll, Host-Wechsel |
+| `src/net.ts` | Mehrspieler: Matchmaking, Host/Client-Protokoll, Host-Wechsel, Transport WebRTC/MQTT |
+| `src/mqtt.ts` | minimaler MQTT-over-WebSocket-Client (Notfall-Relay) |
 | `vite.config.ts` | WASM-Plugin + Service-Worker-Generator |
