@@ -11,7 +11,12 @@ export const gFall = (i: number) => 1 << (2 + 2 * i);
 export const gPit = (i: number) => 1 << (3 + 2 * i);
 export const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 
-const groupsFalling = (i: number) => groups(gFall(i), gFall(i) | gPit(i));
+let ALL_FALL = 0;
+for (let i = 0; i < MAX_HOLES; i++) ALL_FALL |= gFall(i);
+// fallende Objekte stoßen an Loch-Ring/Grube, aneinander und an die ruhenden Nachbarn (G_OBJ)
+const groupsFalling = (i: number) => groups(gFall(i), gFall(i) | gPit(i) | G_OBJ);
+/** ruhende Objekte in Lochnähe: feste Hindernisse für alles, was fällt */
+const groupsProxy = groups(G_OBJ, ALL_FALL);
 
 export interface Obj {
   /** Index in World.objs (gleich auf allen Geräten, da aus demselben Seed erzeugt) */
@@ -66,6 +71,8 @@ export class World {
   private time = 0;
   /** Objekte mit aktivem Physikkörper */
   active = new Set<Obj>();
+  /** ruhende Objekte in Lochnähe mit kinematischem Kollisionskörper (damit nichts hindurchrutscht) */
+  private proxies = new Map<Obj, RAPIER.RigidBody>();
   /** alle Objekte, die sich anfangs bewegen (Autos, Fußgänger) – feste Reihenfolge fürs Netz */
   movers: Obj[] = [];
 
@@ -134,6 +141,7 @@ export class World {
    * mit dem Bodenring und der Grube dieses Lochs kollidiert. Ob es hineinfällt, entscheidet die Physik.
    */
   activate(o: Obj, i: number) {
+    this.dropProxy(o);
     o.falling = i;
     if (o.mover) { o.savedMover = o.mover; o.mover = undefined; }
     const b = this.physics.createRigidBody(RAPIER.RigidBodyDesc.dynamic()
@@ -155,6 +163,7 @@ export class World {
    * damit sie zügig über die Kante kippen statt auf dem Rand zu balancieren.
    */
   suction(holes: { x: number; z: number; r: number; alive: boolean }[], dt: number) {
+    this.stepProxies();
     for (const o of this.active) {
       const h = holes[o.falling], b = o.body;
       if (!h || !h.alive || !b) continue;
@@ -197,7 +206,33 @@ export class World {
     }
   }
 
+  /** Objekt liegt nahe an einem Loch: als festes Hindernis in die Physik aufnehmen (bzw. wieder entfernen) */
+  setNear(o: Obj, near: boolean) {
+    const b = this.proxies.get(o);
+    if (near && !b && !o.body && o.alive) {
+      const nb = this.physics.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased()
+        .setTranslation(o.x, o.y, o.z).setRotation({ x: o.q.x, y: o.q.y, z: o.q.z, w: o.q.w }));
+      for (const cd of o.type.colliders()) this.physics.createCollider(cd.setCollisionGroups(groupsProxy), nb);
+      this.proxies.set(o, nb);
+    } else if (!near && b) this.dropProxy(o);
+  }
+
+  private dropProxy(o: Obj) {
+    const b = this.proxies.get(o);
+    if (b) { this.physics.removeRigidBody(b); this.proxies.delete(o); }
+  }
+
+  /** bewegte Hindernisse (Verkehr, sich aufrichtende Objekte) mitführen */
+  private stepProxies() {
+    for (const [o, b] of this.proxies) {
+      if (!o.mover && !this.righting.has(o)) continue;
+      b.setNextKinematicTranslation({ x: o.x, y: o.y, z: o.z });
+      b.setNextKinematicRotation({ x: o.q.x, y: o.q.y, z: o.q.z, w: o.q.w });
+    }
+  }
+
   remove(o: Obj) {
+    this.dropProxy(o);
     o.alive = false;
     if (o.body) { this.physics.removeRigidBody(o.body); o.body = null; }
     this.active.delete(o);

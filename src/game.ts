@@ -136,7 +136,7 @@ export class Game {
   }
 
   /** Neue Runde: Stadt, Physik und Löcher neu aufbauen */
-  setup(playerName: string, skin: number, mode: Mode = 'battle', w?: Welcome) {
+  setup(playerName: string, mode: Mode = 'battle', w?: Welcome) {
     this.mode = mode;
     this.menuPaused = false;
     if (this.world) {
@@ -175,11 +175,12 @@ export class Game {
       this.eatenPoints = this.world.applyDeadMask(bin);
     }
     const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
-    const colors = SKINS.filter((c) => c !== skin).sort(() => Math.random() - 0.5);
+    // Farben je Match zufällig und alle verschieden
+    const colors = [...SKINS].sort(() => Math.random() - 0.5);
     const n = w ? 0 : mode === 'solo' ? 1 : MAX_HOLES;
     for (let i = 0; i < n; i++) {
       const me = i === 0;
-      const h = new Hole(i, me ? playerName : names[i - 1], me ? skin : colors[(i - 1) % colors.length], me, this.world.physics, this.scene);
+      const h = new Hole(i, me ? playerName : names[i - 1], colors[i % colors.length], me, this.world.physics, this.scene);
       // gestreute Bot-Stärke -> Größenunterschiede -> Duelle
       h.skill = 0.68 + Math.random() * 0.32;
       const [x, z] = this.spawnPoint(h);
@@ -343,11 +344,19 @@ export class Game {
       }
       // Objekte in Lochnähe werden physikalisch. Zu große (bis 2,2× Radius) erst, wenn sie übers Loch
       // ragen: sie kippeln, verkeilen sich und fallen, sobald das Loch groß genug ist.
+      // Alles andere in Lochnähe wird ein festes Hindernis, damit Fallendes nicht hindurchrutscht.
+      let near = false, act = false;
       for (const h of this.holes) {
-        if (!h.alive || ro > h.r * 2.2) continue;
-        const dx = o.x - h.x, dz = o.z - h.z, lim = ro > h.r * 1.25 ? h.r + ro * 0.35 : h.r + ro + 0.6;
-        if (dx * dx + dz * dz < lim * lim) { w.activate(o, h.id); break; }
+        if (!h.alive) continue;
+        const dx = o.x - h.x, dz = o.z - h.z, d2 = dx * dx + dz * dz;
+        if (ro <= h.r * 2.2) {
+          const lim = ro > h.r * 1.25 ? h.r + ro * 0.35 : h.r + ro + 0.6;
+          if (d2 < lim * lim) { w.activate(o, h.id); act = true; break; }
+        }
+        const nl = h.r * 1.3 + ro + 4;
+        if (d2 < nl * nl) near = true;
       }
+      if (!act) w.setNear(o, near);
     }
     if (!auth) return;
     // Löcher fressen Löcher
@@ -469,7 +478,7 @@ export class Game {
     this.net?.leaveRound();
     this.running = false;
     this.paused = false;
-    this.setup('', SKINS[0]);
+    this.setup('');
     this.player.die();
   }
 

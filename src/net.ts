@@ -60,6 +60,7 @@ export class Net {
   private evQ: Ev[] = [];
   private stT = 0; private mvT = 0; private inT = 0; private hiT = 0;
   private lastSt = 0;
+  private born = now();
 
   constructor(private game: Game) {
     const room = (this.room = joinRoom({ appId: APP, identity: 'none' }, 'battle'));
@@ -77,7 +78,7 @@ export class Net {
     room.onError(() => { /* Signaling-Probleme: dann eben offline */ });
 
     this.aHi.onMessage((p: Presence, { peerId }) => { this.peers.set(peerId, p); });
-    this.aJoin.onRequest((req: { name: string; skin: number }, { peerId }) => this.admit(peerId, req));
+    this.aJoin.onRequest((req: { name: string }, { peerId }) => this.admit(peerId, req));
     this.aSt.onMessage((s: State, { peerId }) => {
       if (this.role !== 'client' || !this.inRound(peerId)) return;
       this.host = peerId; this.lastSt = now();
@@ -121,16 +122,32 @@ export class Net {
 
   // ---------- Einstieg ----------
   /** Laufende Runde zum Mitspielen suchen. null = keine gefunden -> selbst hosten */
-  async findMatch(name: string, skin: number): Promise<Welcome | null> {
-    const hosts = [...this.peers].filter(([, p]) => p.st === 'host' && (p.left ?? 0) > 45 && (p.free ?? 0) > 0)
-      .sort((a, b) => (b[1].n ?? 0) - (a[1].n ?? 0) || (b[1].left ?? 0) - (a[1].left ?? 0));
+  async findMatch(name: string): Promise<Welcome | null> {
+    // Direkt nach dem Laden kennt man die anderen noch nicht: kurz auf die Suche warten
+    while (now() - this.born < 7 && !this.openHosts().length) await new Promise((r) => setTimeout(r, 150));
+    const hosts = this.openHosts();
     for (const [peerId] of hosts.slice(0, 2)) {
       try {
-        const w = await this.aJoin.request({ name, skin }, { target: peerId, timeoutMs: 1500 }) as Welcome | null;
+        const w = await this.aJoin.request({ name }, { target: peerId, timeoutMs: 2500 }) as Welcome | null;
         if (w && w.holes) { this.role = 'client'; this.host = peerId; this.lastSt = now(); return w; }
       } catch { /* nächster */ }
     }
     return null;
+  }
+
+  /** Runden, in die man einsteigen kann (meiste Spieler, dann meiste Restzeit zuerst) */
+  private openHosts() {
+    return [...this.peers].filter(([, p]) => p.st === 'host' && (p.left ?? 0) > 45 && (p.free ?? 0) > 0)
+      .sort((a, b) => (b[1].n ?? 0) - (a[1].n ?? 0) || (b[1].left ?? 0) - (a[1].left ?? 0));
+  }
+
+  /** Diagnose (Seite mit ?debug öffnen) */
+  debugInfo() {
+    const peers = this.room.getPeers();
+    return [`Version ${APP.slice(-10)}  ich ${this.self.slice(0, 6)}  Rolle ${this.role}${this.host ? ' → ' + this.host.slice(0, 6) : ''}`,
+      `verbunden: ${Object.keys(peers).length}`,
+      ...[...this.peers].map(([id, p]) => `  ${id.slice(0, 6)} ${p.st}${p.st === 'host' ? ` ${Math.round(p.left ?? 0)}s frei ${p.free} Spieler ${p.n}` : ''}${peers[id]?.direct === false ? ' (Relay)' : ''}`),
+    ].join('\n');
   }
 
   /** eigene Runde: wir sind Host, andere können einsteigen */
@@ -141,7 +158,7 @@ export class Net {
   }
 
   /** Host: neuer Spieler übernimmt ein Bot-Loch */
-  private admit(peerId: string, req: { name: string; skin: number }): Welcome | null {
+  private admit(peerId: string, req: { name: string }): Welcome | null {
     const g = this.game;
     if (this.role !== 'host' || !g.running || g.mode !== 'battle' || g.timeLeft < 40 || !g.player.alive) return null;
     if (this.holeOf(peerId)) return null;
@@ -150,7 +167,7 @@ export class Net {
     // das kleinste Bot-Loch – fair für die, die schon spielen
     const h = bots.sort((a, b) => a.size - b.size)[0];
     const name = cleanName(req?.name);
-    const color = g.holes.some((o) => o !== h && o.alive && o.color === req.skin) ? h.color : Number(req.skin) || h.color;
+    const color = h.color; // Farbe des Bot-Lochs – im Match ohnehin einzigartig
     h.setIdentity(name, color);
     h.peer = peerId; h.ctrl = 'net';
     h.setNet(h.x, h.z, 0, 0, now());

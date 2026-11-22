@@ -1,5 +1,5 @@
 import './style.css';
-import { SKINS, MODE_NAMES, starsFor, escapeHtml, type Mode } from './config';
+import { MODE_NAMES, starsFor, escapeHtml, type Mode } from './config';
 import type { Game } from './game';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -10,17 +10,8 @@ const store = {
 
 // ---------- Menü (sofort bedienbar, Spiel lädt im Hintergrund) ----------
 let game: Game | null = null;
-let skin = Number(store.get('skin')) || SKINS[0];
 const name = $<HTMLInputElement>('name');
 name.value = store.get('name') || '';
-const skins = $('skins');
-for (const c of SKINS) {
-  const el = document.createElement('div');
-  el.className = 'skin' + (c === skin ? ' sel' : '');
-  el.style.background = '#' + c.toString(16).padStart(6, '0');
-  el.onclick = () => { skin = c; store.set('skin', String(c)); skins.querySelectorAll('.skin').forEach((s) => s.classList.remove('sel')); el.classList.add('sel'); };
-  skins.appendChild(el);
-}
 let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'battle';
 // Rekorde je Modus (Solo in Promille der Stadt)
 const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
@@ -53,10 +44,17 @@ const play = async () => {
   store.set('name', name.value.trim());
   // Battle: still nach einer laufenden Runde echter Spieler suchen, sonst selbst eine eröffnen
   const net = mode === 'battle' ? game.net : null;
-  const w = net ? await net.findMatch(n, skin).catch(() => null) : null;
+  const w = net ? await net.findMatch(n).catch(() => null) : null;
   starting = false;
-  game.setup(n, skin, mode, w ?? undefined);
+  game.setup(n, mode, w ?? undefined);
   if (net && !w) net.becomeHost();
+  // Solo lässt sich anhalten; im Battle läuft die Welt weiter (echte Mitspieler) – dort nur „Verlassen“
+  const solo = mode === 'solo';
+  $('btnpause').textContent = solo ? '⏸' : '✕';
+  $('btnpause').setAttribute('aria-label', solo ? 'Pause' : 'Runde verlassen');
+  $('pausetitle').textContent = solo ? 'Pause' : 'Runde verlassen?';
+  $('resume').textContent = solo ? 'WEITER' : 'WEITERSPIELEN';
+  $('quit').textContent = solo ? 'Runde beenden' : 'Verlassen';
   show('menu', false); show('over', false); show('pause', false); show('hud', true);
   $('hud').classList.toggle('solo', mode === 'solo');
   game.start(w && w.cd > 0.3 ? w.cd : 3);
@@ -89,7 +87,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) return;
   // Im Hintergrund rechnet der Browser nicht weiter: als Host die Runde an die anderen abgeben
   if (game?.net?.role === 'host') game.net.leaveRound();
-  pause(true);
+  if (game?.mode === 'solo') pause(true);
 });
 
 async function boot() {
@@ -125,7 +123,16 @@ async function boot() {
   if (import.meta.env.DEV) (window as any).game = g;
 
   // Mehrspieler im Hintergrund – wenn es nicht klappt, merkt man nichts (Bots)
-  import('./net').then(({ Net }) => { g.net = new Net(g); }).catch((e) => console.warn('offline', e));
+  import('./net').then(({ Net }) => {
+    g.net = new Net(g);
+    // Diagnose: Seite mit ?debug öffnen
+    if (new URLSearchParams(location.search).has('debug')) {
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:11px/1.35 monospace;color:#fff;background:rgba(0,0,0,.65);border-radius:8px;pointer-events:none;white-space:pre';
+      document.body.appendChild(pre);
+      setInterval(() => { pre.textContent = g.net!.debugInfo(); }, 500);
+    }
+  }).catch((e) => console.warn('offline', e));
 
   g.demo(); // Hintergrund-Demo im Menü
   const btn = $<HTMLButtonElement>('play');
