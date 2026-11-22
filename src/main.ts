@@ -1,5 +1,5 @@
 import './style.css';
-import { SKINS, MODE_NAMES, escapeHtml, type Mode } from './config';
+import { SKINS, MODE_NAMES, starsFor, escapeHtml, type Mode } from './config';
 import type { Game } from './game';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -21,7 +21,7 @@ for (const c of SKINS) {
   el.onclick = () => { skin = c; store.set('skin', String(c)); skins.querySelectorAll('.skin').forEach((s) => s.classList.remove('sel')); el.classList.add('sel'); };
   skins.appendChild(el);
 }
-let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'classic';
+let mode: Mode = (store.get('mode') as Mode) in MODE_NAMES ? (store.get('mode') as Mode) : 'battle';
 // Rekorde je Modus (Solo in Promille der Stadt)
 const best = (m: Mode) => Number(store.get('best-' + m)) || 0;
 const fmt = (m: Mode, v: number) => (m === 'solo' ? (v / 10).toFixed(1) + ' %' : String(v));
@@ -51,6 +51,7 @@ const play = async () => {
   store.set('name', name.value.trim());
   game.setup(n, skin, mode);
   show('menu', false); show('over', false); show('pause', false); show('hud', true);
+  $('hud').classList.toggle('solo', mode === 'solo');
   game.start();
   try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
 };
@@ -73,6 +74,7 @@ $('btnpause').onclick = () => pause(true);
 $('resume').onclick = () => pause(false);
 $('quit').onclick = () => { game?.setPaused(false); game?.demo(); wakeLock?.release().catch(() => {}); wakeLock = null; toMenu(); };
 addEventListener('keydown', (e) => {
+  if (!$('over').classList.contains('hidden') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); play(); return; }
   if (!game?.running) return;
   if (e.key === 'Escape' || e.key.toLowerCase() === 'p') pause(!game.paused);
 });
@@ -91,18 +93,21 @@ async function boot() {
     const rec = value > best(r.mode);
     if (rec) store.set('best-' + r.mode, String(value));
     if (r.mode === 'solo') {
+      const st = starsFor(r.percent);
       $('overtitle').textContent = `${(r.percent * 100).toFixed(1)} % der Stadt!`;
-      $('results').innerHTML = `<li class="me"><span class="n">Punkte</span><span>${r.score}</span></li>`;
+      $('results').innerHTML = `<li class="stars">${'<span class="on">★</span>'.repeat(st)}${'<span>★</span>'.repeat(3 - st)}</li>`
+        + `<li class="me"><span class="n">Level</span><span>${r.table[0].level + 1}</span></li>`
+        + `<li><span class="n">Punkte</span><span>${r.score}</span></li>`;
     } else {
-      $('overtitle').textContent = r.mode === 'battle' && r.eliminated ? `Gefressen – Platz ${r.rank}`
+      $('overtitle').textContent = r.eliminated ? `Gefressen – Platz ${r.rank}`
         : r.rank === 1 ? '🏆 Du hast gewonnen!' : `Platz ${r.rank}`;
       $('results').innerHTML = r.table.map((h, i) => {
-        const out = r.mode === 'battle' && !h.alive;
-        return `<li class="${h.isPlayer ? 'me' : ''}"><span>${i + 1}.</span><span class="n">${escapeHtml(h.name)}${out ? ' 💀' : ''}</span><span>${h.score}</span></li>`;
+        const out = !h.alive;
+        return `<li class="${h.isPlayer ? 'me' : ''}"><span>${i + 1}.</span><span class="n">${i === 0 && !out ? '👑 ' : ''}${escapeHtml(h.name)}${out ? ' 💀' : ''}</span><span>Lv ${h.level + 1}</span></li>`;
       }).join('');
     }
     $('overbest').textContent = rec ? `Neuer Rekord: ${fmt(r.mode, value)}!` : `Rekord: ${fmt(r.mode, best(r.mode))}`;
-    setTimeout(() => { show('hud', false); show('over', true); showBest(); }, 900);
+    setTimeout(() => { show('hud', false); show('over', true); showBest(); $('again').focus(); }, 600);
   };
 
   if (import.meta.env.DEV) (window as any).game = g;

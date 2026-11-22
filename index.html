@@ -21,6 +21,13 @@
   <div id="hud" class="hidden">
     <div id="timer">2:00</div>
     <ol id="board"></ol>
+    <div id="solo">
+      <div id="soloval">0 %</div>
+      <div id="solobar"><div id="solofill"></div>
+        <i style="left:52.6%"></i><i style="left:78.9%"></i>
+      </div>
+      <div id="solostars"><span>★</span><span>★</span><span>★</span></div>
+    </div>
     <div id="levelbox">
       <div id="levelnum">Lvl 1</div>
       <div id="levelbar"><div id="levelfill"></div></div>
@@ -36,12 +43,10 @@
   <div id="menu" class="screen">
     <div class="card">
       <h1>SCHLUND</h1>
-      <p class="sub">Friss die Stadt. Werde größer. Friss die anderen.</p>
       <input id="name" maxlength="14" placeholder="Dein Name" autocomplete="off" />
       <div id="skins"></div>
       <div id="modes">
-        <button class="mode sel" data-mode="classic"><b>Klassik</b><small>Größtes Loch gewinnt</small></button>
-        <button class="mode" data-mode="battle"><b>Battle</b><small>Wer gefressen wird, fliegt raus</small></button>
+        <button class="mode sel" data-mode="battle"><b>Battle</b><small>Wer gefressen wird, fliegt raus</small></button>
         <button class="mode" data-mode="solo"><b>Solo</b><small>Friss so viel Stadt wie möglich</small></button>
       </div>
       <button id="play" class="big" disabled>LÄDT…</button>

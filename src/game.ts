@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { World, MAX_HOLES, type Obj } from './world';
 import { Hole } from './hole';
-import { HALF } from './city';
+import { HALF, ROADS } from './city';
 import { Sfx } from './sfx';
 import { xray } from './objects';
-import { SKINS, escapeHtml, type Mode } from './config';
+import { SKINS, STAR_STEPS, starsFor, escapeHtml, type Mode } from './config';
 
 export const ROUND_TIME = 120;
 
@@ -57,9 +57,9 @@ export class Game {
 
   running = false;
   paused = false;
-  mode: Mode = 'classic';
+  mode: Mode = 'battle';
   /** wie viel größer ein Loch sein muss, um ein anderes zu fressen */
-  get eatRatio() { return this.mode === 'battle' ? 1.1 : 1.2; }
+  readonly eatRatio = 1.1;
   /** Sekunden bis zum Start (3-2-1) */
   countdown = 0;
   timeLeft = ROUND_TIME;
@@ -131,7 +131,7 @@ export class Game {
   }
 
   /** Neue Runde: Stadt, Physik und Löcher neu aufbauen */
-  setup(playerName: string, skin: number, mode: Mode = 'classic') {
+  setup(playerName: string, skin: number, mode: Mode = 'battle') {
     this.mode = mode;
     if (this.world) {
       this.scene.remove(this.world.group, this.ground);
@@ -152,8 +152,8 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const me = i === 0;
       const h = new Hole(i, me ? playerName : names[i - 1], me ? skin : colors[(i - 1) % colors.length], me, this.world.physics, this.scene);
-      // im Battle stärker gestreute Bot-Stärke -> Größenunterschiede -> Duelle
-      h.skill = mode === 'battle' ? 0.68 + Math.random() * 0.32 : 0.82 + Math.random() * 0.18;
+      // gestreute Bot-Stärke -> Größenunterschiede -> Duelle
+      h.skill = 0.68 + Math.random() * 0.32;
       const [x, z] = this.spawnPoint(h);
       h.respawn(x, z, 0);
       this.holes.push(h);
@@ -170,10 +170,10 @@ export class Game {
 
   /** Spawn auf einer Straße, weit weg von großen Löchern */
   spawnPoint(self: Hole): [number, number] {
-    const roads = [-96, -48, 0, 48, 96];
+    const roads = ROADS;
     let best: [number, number] = [0, 0], bestD = -1;
     for (let k = 0; k < 20; k++) {
-      const along = (Math.random() * 2 - 1) * (HALF - 15);
+      const along = (Math.random() * 2 - 1) * (HALF - 10);
       const c = roads[(Math.random() * roads.length) | 0];
       const p: [number, number] = Math.random() < 0.5 ? [along, c] : [c, along];
       let d = 1e9;
@@ -269,8 +269,8 @@ export class Game {
     for (const o of this.holes) {
       if (o === h || !o.alive || h.r < o.r * (this.eatRatio + 0.05)) continue;
       const d = Math.hypot(o.x - h.x, o.z - h.z);
-      // im Battle jagen Bots weiter und lieber
-      const range = this.mode === 'battle' ? 70 : 30, lure = this.mode === 'battle' ? 120 : 40;
+      // Bots jagen weit und gern
+      const range = 70, lure = 120;
       if (d < range) { const v = (lure + o.score * 0.3) / (d + 3); if (v > best) { best = v; bx = o.x; bz = o.z; } }
     }
     // 3) Futter: das lohnendste erreichbare Objekt
@@ -315,10 +315,11 @@ export class Game {
         if (o.y > -0.2 && dx * dx + dz * dz > lim * lim) w.deactivate(o);
         continue;
       }
-      // Objekte in Lochnähe werden physikalisch; zu große bleiben liegen und überbrücken das Loch
+      // Objekte in Lochnähe werden physikalisch. Zu große (bis 2,2× Radius) erst, wenn sie übers Loch
+      // ragen: sie kippeln, verkeilen sich und fallen, sobald das Loch groß genug ist.
       for (const h of this.holes) {
-        if (!h.alive || ro > h.r * 1.25) continue;
-        const dx = o.x - h.x, dz = o.z - h.z, lim = h.r + ro + 0.6;
+        if (!h.alive || ro > h.r * 2.2) continue;
+        const dx = o.x - h.x, dz = o.z - h.z, lim = ro > h.r * 1.25 ? h.r + ro * 0.35 : h.r + ro + 0.6;
         if (dx * dx + dz * dz < lim * lim) { w.activate(o, h.id); break; }
       }
     }
@@ -331,14 +332,13 @@ export class Game {
         if (d < a.r - b.r * 0.4) this.eatHole(a, b);
       }
     }
-    if (this.mode === 'battle') return; // keine Wiederkehr
+    if (this.running) return; // im Spiel kein Comeback – nur die Menü-Demo füllt nach
     for (const h of this.holes) {
-      if (h.alive) continue;
+      if (h.alive || h.isPlayer) continue;
       h.respawnIn -= dt;
       if (h.respawnIn <= 0 && this.timeLeft > 3) {
         const [x, z] = this.spawnPoint(h);
         h.respawn(x, z, Math.max(0, h.level - 3));
-        if (h.isPlayer) this.toast('Weiter geht’s!');
       }
     }
   }
@@ -365,9 +365,9 @@ export class Game {
     if (a.isPlayer) { this.popAcc += bonus; this.toast(`${b.name} verschlungen! 😈`); this.sfx.levelUp(); navigator.vibrate?.([30, 40, 60]); }
     if (b.isPlayer) {
       this.toast(`${a.name} hat dich gefressen!`); this.sfx.hurt(); navigator.vibrate?.(200);
-      if (this.mode === 'battle') setTimeout(() => this.running && this.finish(), 1200);
+      setTimeout(() => this.running && this.finish(), 1200);
     }
-    if (this.mode === 'battle' && this.player.alive && this.holes.filter((h) => h.alive).length === 1) {
+    if (this.running && this.player.alive && this.holes.filter((h) => h.alive).length === 1) {
       this.toast('Letztes Loch! 🏆');
       setTimeout(() => this.running && this.finish(), 1200);
     }
@@ -438,6 +438,10 @@ export class Game {
       this.swallow(dt);
     }
     if (!this.world) return;
+    // Krone für das größte Loch (nur mit Gegnern)
+    let leader: Hole | null = null;
+    for (const h of this.holes) if (h.alive && this.holes.length > 1 && (!leader || h.size > leader.size)) leader = h;
+    for (const h of this.holes) h.setCrown(h === leader);
     // Gefahr/Beute relativ zum Spieler markieren
     const pl = this.player;
     for (const h of this.holes) {
@@ -532,14 +536,18 @@ export class Game {
     if (this.boardT <= 0) {
       this.boardT = 0.25;
       if (this.mode === 'solo') {
-        $('board').innerHTML = `<li class="me"><span class="n">Stadt gefressen</span><span class="s">${this.percentText()}</span></li>`;
+        const pc = this.percent();
+        $('soloval').textContent = this.percentText();
+        $('solofill').style.width = `${Math.min(100, pc * 100 / STAR_STEPS[2]).toFixed(1)}%`;
+        const n = starsFor(pc);
+        document.querySelectorAll('#solostars span').forEach((el, i) => el.classList.toggle('on', i < n));
       } else {
         // schmale Bildschirme: nur Top 3 + eigene Zeile
         const compact = innerWidth < 600;
         $('board').innerHTML = this.ranking().map((h, i) => {
           if (compact && i >= 3 && !h.isPlayer) return '';
-          const out = this.mode === 'battle' && !h.alive;
-          return `<li class="${h.isPlayer ? 'me' : ''}${out ? ' out' : ''}"><span>${i + 1}.</span><span class="dot" style="background:#${h.color.toString(16).padStart(6, '0')}"></span><span class="n">${escapeHtml(h.name)}</span><span class="s">${out ? '💀' : h.score}</span></li>`;
+          const out = !h.alive;
+          return `<li class="${h.isPlayer ? 'me' : ''}${out ? ' out' : ''}"><span>${i + 1}.</span><span class="dot" style="background:#${h.color.toString(16).padStart(6, '0')}"></span><span class="n">${escapeHtml(h.name)}</span><span class="s">${out ? '💀' : 'Lv ' + (h.level + 1)}</span></li>`;
         }).join('');
       }
     }
@@ -548,11 +556,10 @@ export class Game {
   private percent() { return Math.min(1, this.eatenPoints / this.totalPoints); }
   private percentText() { return (this.percent() * 100).toFixed(1) + ' %'; }
 
-  /** Rangliste: im Battle zuerst die Überlebenden, dann die Ausgeschiedenen (zuletzt gefressen zuerst) */
+  /** Rangliste nach Lochgröße: zuerst die Überlebenden, dann die Ausgeschiedenen (zuletzt gefressen zuerst) */
   ranking() {
-    if (this.mode !== 'battle') return [...this.holes].sort((a, b) => b.score - a.score);
     return [...this.holes].sort((a, b) =>
-      a.alive !== b.alive ? (a.alive ? -1 : 1) : a.alive ? b.score - a.score : b.outAt - a.outAt);
+      a.alive !== b.alive ? (a.alive ? -1 : 1) : a.alive ? (b.size - a.size || b.score - a.score) : b.outAt - a.outAt);
   }
 
   private finish() {

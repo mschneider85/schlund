@@ -60,6 +60,7 @@ html, body {
   max-height: 100%; overflow: auto;
 }
 h1 {
+  margin-bottom: 20px;
   font-size: 54px; font-weight: 900; letter-spacing: 4px;
   background: linear-gradient(90deg, #ff5caa, #ffd250); -webkit-background-clip: text; background-clip: text; color: transparent;
 }
@@ -135,7 +136,7 @@ button.small { margin-top: 14px; padding: 10px 16px; background: rgba(255,255,25
 }
 
 /* Modusauswahl */
-#modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px; }
+#modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 18px; }
 .mode {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 6px; border-radius: 14px;
   background: rgba(255,255,255,.07); border: 2px solid transparent; font-weight: 700;
@@ -165,3 +166,20 @@ button.big:disabled { opacity: .55; filter: grayscale(.4); cursor: wait; }
   #hudbtns { top: calc(62px + env(safe-area-inset-top)); }
   button.icon { width: 36px; height: 36px; font-size: 16px; }
 }
+
+/* Solo-Fortschritt */
+#solo {
+  display: none; position: absolute; top: calc(12px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+  background: rgba(20, 16, 40, .55); backdrop-filter: blur(6px); border-radius: 12px; padding: 8px 12px; width: 190px;
+}
+#hud.solo #solo { display: block; }
+#hud.solo #board { display: none; }
+#soloval { font-weight: 900; font-size: 18px; margin-bottom: 6px; }
+#solobar { position: relative; height: 10px; border-radius: 5px; background: rgba(255,255,255,.18); overflow: hidden; }
+#solofill { height: 100%; width: 0; background: linear-gradient(90deg, #4cc9f0, #7bf06c); transition: width .25s; }
+#solobar i { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(0,0,0,.35); }
+#solostars { margin-top: 4px; display: flex; justify-content: space-between; padding-left: 45%; font-size: 18px; }
+#solostars span, #results li.stars span { color: rgba(255,255,255,.25); transition: color .3s, transform .3s; }
+#solostars span.on, #results li.stars span.on { color: #ffd250; transform: scale(1.2); }
+#results li.stars { justify-content: center; font-size: 42px; gap: 12px; background: none !important; }
+@media (max-width: 600px) { #solo { width: 140px; } }

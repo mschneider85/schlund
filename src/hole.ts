@@ -3,7 +3,7 @@ import RAPIER from '@dimforge/rapier3d-simd';
 import { gFall, gPit, groups } from './world';
 
 /** XP, die für den nächsten Level nötig sind */
-export const xpNext = (lvl: number) => Math.round(6 * Math.pow(1.55, lvl));
+export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.42, lvl));
 export const radiusFor = (lvl: number) => 1.15 * Math.pow(1.22, lvl);
 export const MAX_LEVEL = 14;
 
@@ -109,6 +109,15 @@ export class Hole {
   get speed() { return 9.5; }
   /** sichtbar (lebt oder wird gerade eingesaugt) */
   get visible() { return this.alive || !!this.suckBy; }
+  /** Größe für die Rangliste (Level + Fortschritt zum nächsten) */
+  get size() { return this.level + Math.min(1, this.progress); }
+  private crowned = false;
+  setCrown(on: boolean) {
+    if (on === this.crowned) return;
+    this.crowned = on;
+    this.label.textContent = (on ? '👑 ' : '') + this.name;
+  }
+
   get progress() { return this.level >= MAX_LEVEL ? 1 : this.xp / xpNext(this.level); }
 
   gain(points: number) {
@@ -190,7 +199,8 @@ export class Hole {
     const r = this.r;
     const grp = groups(gPit(this.id), gFall(this.id));
     // Bodenring: Quader, deren Innenkante tangential bei r liegt (überdecken nie das Lochinnere)
-    const R = r * 3.6 + 3, nr = 36;
+    // breit genug für Objekte bis 2,2× Lochradius, die übers Loch ragen
+    const R = r * 5.6 + 3, nr = 40;
     const halfT = R * Math.tan(Math.PI / nr) * 1.02;
     for (let i = 0; i < nr; i++) {
       const a = (i / nr) * Math.PI * 2;

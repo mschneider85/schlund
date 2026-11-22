@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { T, BUILDINGS, type ObjType } from './objects';
 
-export const HALF = 120; // Karte: [-HALF, HALF]²
-export const ROADS = [-96, -48, 0, 48, 96];
+// kompakte Karte: in 2 Minuten soll man einen Großteil der Stadt schaffen
+export const HALF = 82; // Karte: [-HALF, HALF]²
+export const ROADS = [-60, -20, 20, 60];
 export const ROAD_HW = 4.5; // halbe Fahrbahnbreite
 export const WALK_HW = 6.5; // inkl. Gehweg
 
@@ -133,7 +134,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
           else if (r < 0.05) add(T.trash, ...at(t, side * 5.8));
           else if (r < 0.065) add(T.bench, ...at(t, side * 5.9), rotAlong + (side > 0 ? Math.PI : 0));
           else if (r < 0.085) add(T.tree, ...at(t, side * 5.6));
-          if (R() < 0.07) {
+          if (R() < 0.13) {
             const lane = c + side * (4.85 + R() * 0.3);
             const dir = R() < 0.5 ? 1 : -1;
             const [x, z] = at(t, lane - c);
@@ -155,7 +156,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
           const dir = side as 1 | -1;
           const rot = rotAlong + (dir < 0 ? Math.PI : 0);
           add(isBus ? T.bus : T.car, x, z, rot, { kind: 'car', axis, dir, speed: laneSpeed, lane: c + side * 1.9 });
-          t += 18 + R() * 30;
+          t += 13 + R() * 16;
         }
       }
     }
@@ -188,7 +189,8 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
     const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
 
     if (b.kind === 'city') {
-      const nx = W > 30 && R() < 0.6 ? 3 : 2, nz = D > 30 && R() < 0.6 ? 3 : 2;
+      const big = b.downtown > 0.75 && R() < 0.8;
+      const nx = big ? 1 : W > 30 && R() < 0.6 ? 3 : 2, nz = big ? 1 : D > 30 && R() < 0.6 ? 3 : 2;
       const lw = W / nx, ld = D / nz;
       for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
         const lx = b.x0 + lw * (i + 0.5), lz = b.z0 + ld * (j + 0.5);
@@ -216,7 +218,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
       scatter(T.bush, 5, 0.6);
       scatter(T.bench, 3, 0.9);
       scatter(T.trash, 2, 0.35);
-      wanderers(6 + Math.floor(R() * 6));
+      wanderers(10 + Math.floor(R() * 8));
     } else if (b.kind === 'homes') {
       const nx = Math.max(1, Math.round(W / 11)), nz = Math.max(1, Math.round(D / 11));
       const lw = W / nx, ld = D / nz;
@@ -227,7 +229,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
       }
       scatter(T.tree, Math.round(W * D / 70), 1.1);
       scatter(T.bush, Math.round(W * D / 60), 0.6);
-      wanderers(3 + Math.floor(R() * 3));
+      wanderers(5 + Math.floor(R() * 4));
     } else {
       // Park mit Brunnen in der Mitte (freihalten)
       occ.push([cx, cz, Math.min(W, D) * 0.18 * 1.4 + 0.5]);

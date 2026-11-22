@@ -146,10 +146,19 @@ export class World {
   suction(holes: { x: number; z: number; r: number; alive: boolean }[], dt: number) {
     for (const o of this.active) {
       const h = holes[o.falling], b = o.body;
-      if (!h || !h.alive || !b || o.type.ro > h.r * 0.95) continue;
+      if (!h || !h.alive || !b) continue;
       const dx = h.x - o.x, dz = h.z - o.z, d = Math.hypot(dx, dz) || 1;
       if (d > h.r + o.type.ro * 0.6) continue;
-      const m = b.mass(), a = 7 * dt * m;
+      const m = b.mass();
+      if (o.type.ro > h.r * 0.95) {
+        // passt (noch) nicht: nur wackeln
+        if (Math.random() < dt * 8) {
+          const k = m * o.type.ro * 0.25;
+          b.applyTorqueImpulse({ x: (Math.random() - 0.5) * k, y: 0, z: (Math.random() - 0.5) * k }, true);
+        }
+        continue;
+      }
+      const a = 7 * dt * m;
       b.applyImpulse({ x: (dx / d) * a, y: o.y > -0.5 ? -a * 0.8 : 0, z: (dz / d) * a }, true);
     }
   }
