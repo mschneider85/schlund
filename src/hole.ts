@@ -7,6 +7,11 @@ export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.48, lvl));
 export const radiusFor = (lvl: number) => 1.15 * Math.pow(1.22, lvl);
 export const MAX_LEVEL = 16;
 
+// Werte aus dem Netz nie ungeprüft übernehmen (landen u. a. im HTML der Rangliste)
+const num = (v: unknown, lo: number, hi: number) => { const n = Number(v); return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : lo; };
+export const cleanName = (v: unknown) => String(v ?? '').slice(0, 16) || 'Spieler';
+export const cleanColor = (v: unknown) => (Number(v) & 0xffffff) >>> 0;
+
 const pitGeo = new THREE.CylinderGeometry(1, 1, 1, 56, 1, false).translate(0, -0.5, 0);
 const pitMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
@@ -56,6 +61,12 @@ export class Hole {
   private threatRing?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   private t = 0;
   label: HTMLDivElement;
+  /** wer steuert: eigenes Gerät, KI oder Netz (Position kommt von einem anderen Spieler/Host) */
+  ctrl: 'local' | 'ai' | 'net';
+  /** Peer-ID des menschlichen Spielers (null = Bot) */
+  peer: string | null = null;
+  /** letzte Netzposition */
+  private net = { x: 0, z: 0, vx: 0, vz: 0, at: 0 };
   // KI
   aiT = 0; tx = 0; tz = 0; skill = 1;
   /** aktuelles Futter-Ziel + seit wann; Ziele, die nicht hineinfallen, werden eine Weile ignoriert */
@@ -66,6 +77,7 @@ export class Hole {
     public id: number, public name: string, public color: number, public isPlayer: boolean,
     private physics: RAPIER.World, scene: THREE.Scene,
   ) {
+    this.ctrl = isPlayer ? 'local' : 'ai';
     this.body = physics.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     this.pit = new THREE.Mesh(pitGeo, pitMat);
     this.rim = new THREE.Mesh(rimGeo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 }));
@@ -99,6 +111,32 @@ export class Hole {
     this.label.textContent = name;
     this.label.style.color = '#' + new THREE.Color(color).getHexString();
     document.getElementById('labels')!.appendChild(this.label);
+  }
+
+  /** Name/Farbe ändern (ein Spieler übernimmt ein Bot-Loch) */
+  setIdentity(name: string, color: number) {
+    name = cleanName(name); color = cleanColor(color);
+    this.name = name; this.color = color;
+    (this.rim.material as THREE.MeshBasicMaterial).color.setHex(color);
+    this.label.style.color = '#' + new THREE.Color(color).getHexString();
+    this.label.textContent = (this.crowned ? '👑 ' : '') + name;
+  }
+
+  /** neue Position aus dem Netz */
+  setNet(x: number, z: number, vx: number, vz: number, now: number) {
+    if (![x, z, vx, vz].every(Number.isFinite)) return;
+    const n = this.net;
+    x = num(x, -200, 200); z = num(z, -200, 200); vx = num(vx, -30, 30); vz = num(vz, -30, 30);
+    n.x = x; n.z = z; n.vx = vx; n.vz = vz; n.at = now;
+    // weit daneben (Einstieg, Neustart) -> springen statt gleiten
+    if (Math.hypot(x - this.x, z - this.z) > 12 + this.r) { this.x = x; this.z = z; }
+  }
+
+  /** Stand vom Host übernehmen (Level/Punkte); löst den Level-Puls aus */
+  setStats(level: number, xp: number, score: number, kills: number) {
+    level = Math.round(num(level, 0, MAX_LEVEL));
+    if (level > this.level) this.pulse = 1;
+    this.level = level; this.xp = num(xp, 0, 1e9); this.score = Math.round(num(score, 0, 1e9)); this.kills = Math.round(num(kills, 0, 99));
   }
 
   get targetR() { return radiusFor(this.level); }
@@ -146,11 +184,22 @@ export class Hole {
     }
     if (!this.alive) return;
     if (frozen) { this.applyVisuals(); return; }
-    const sp = this.speed;
-    const k = 1 - Math.exp(-dt * 9);
-    this.vx += (this.dirX * sp - this.vx) * k;
-    this.vz += (this.dirZ * sp - this.vz) * k;
-    this.x += this.vx * dt; this.z += this.vz * dt;
+    if (this.ctrl === 'net') {
+      // fremdes Loch: der letzten Netzposition (vorausberechnet) weich folgen
+      const n = this.net, age = Math.min(0.25, performance.now() / 1000 - n.at);
+      const k = 1 - Math.exp(-dt * 12);
+      this.x += (n.x + n.vx * age - this.x) * k;
+      this.z += (n.z + n.vz * age - this.z) * k;
+      this.vx = n.vx; this.vz = n.vz;
+      const l = Math.hypot(n.vx, n.vz);
+      this.dirX = l > 0.5 ? n.vx / this.speed : 0; this.dirZ = l > 0.5 ? n.vz / this.speed : 0;
+    } else {
+      const sp = this.speed;
+      const k = 1 - Math.exp(-dt * 9);
+      this.vx += (this.dirX * sp - this.vx) * k;
+      this.vz += (this.dirZ * sp - this.vz) * k;
+      this.x += this.vx * dt; this.z += this.vz * dt;
+    }
     const lim = limit - this.r;
     this.x = Math.max(-lim, Math.min(lim, this.x));
     this.z = Math.max(-lim, Math.min(lim, this.z));

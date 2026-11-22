@@ -14,8 +14,12 @@ npm run preview   # Build lokal testen (PWA/Offline nur hier)
   das Loch ist ein `discard` im Bodenshader, Objekte verdunkeln sich beim Fallen, Röntgen-Dithering für Gebäude vor dem Spieler.
 - **WebAssembly (SIMD)** – Rapier-Physik (Rust). Objekte bekommen erst beim Hineinkippen einen Physikkörper;
   die Grubenwände sind kinematische Collider, Kollisionsgruppen trennen die Löcher voneinander.
+- **WebRTC-Mehrspieler ohne Server** (Battle) – über [Trystero](https://github.com/dmotz/trystero), Signaling über öffentliche Nostr-Relays.
+  Wer eine Runde startet, ist Host (Physik, Bots, Punkte); später Kommende übernehmen still ein Bot-Loch.
+  Das eigene Loch bewegt sich lokal ohne Verzögerung, Verkehr und fremde Löcher werden interpoliert.
+  Geht der Host, übernimmt ein anderer Spieler nahtlos; ohne Verbindung spielt man einfach gegen Bots.
 - **PWA** – Manifest, Service Worker mit beim Build erzeugter Precache-Liste (komplett offline spielbar), Install-Button.
-- Web Audio (synthetische Sounds), Vibration API, Screen Wake Lock, Pointer Events (Touch-Joystick), WASD/Pfeiltasten.
+- Web Audio (synthetische Sounds), Vibration API, Screen Wake Lock, Pointer Events (Touch-Steuerung), WASD/Pfeiltasten.
 
 ## Code
 | Datei | Inhalt |
@@ -25,4 +29,5 @@ npm run preview   # Build lokal testen (PWA/Offline nur hier)
 | `src/world.ts` | Physikwelt, Objektzustand, Verkehr, Instanz-Sync |
 | `src/hole.ts` | Loch: Level/Wachstum, Grubenwände, Darstellung |
 | `src/game.ts` | Spielschleife, Kamera, Eingabe, Bot-KI, HUD |
+| `src/net.ts` | Mehrspieler: Matchmaking, Host/Client-Protokoll, Host-Wechsel |
 | `vite.config.ts` | WASM-Plugin + Service-Worker-Generator |

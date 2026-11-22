@@ -14,6 +14,8 @@ export const groups = (member: number, filter: number) => ((member & 0xffff) << 
 const groupsFalling = (i: number) => groups(gFall(i), gFall(i) | gPit(i));
 
 export interface Obj {
+  /** Index in World.objs (gleich auf allen Geräten, da aus demselben Seed erzeugt) */
+  idx: number;
   type: ObjType;
   inst: number;
   /** Physikkörper – existiert erst, sobald das Objekt in ein Loch kippt */
@@ -30,7 +32,13 @@ export interface Obj {
   q: THREE.Quaternion;
   vx: number; vz: number;
   dirty: boolean;
+  /** Netz (Client): letzte vom Host empfangene Position + geschätzte Geschwindigkeit */
+  net?: { x: number; z: number; vx: number; vz: number; at: number };
 }
+
+/** Wert im Mover-Paket für "bewegt sich beim Host gerade nicht" */
+const NO_POS = 32767;
+const POS_Q = 50;
 
 const _m = new THREE.Matrix4();
 const _p = new THREE.Vector3();
@@ -58,8 +66,10 @@ export class World {
   private time = 0;
   /** Objekte mit aktivem Physikkörper */
   active = new Set<Obj>();
+  /** alle Objekte, die sich anfangs bewegen (Autos, Fußgänger) – feste Reihenfolge fürs Netz */
+  movers: Obj[] = [];
 
-  constructor(seed: number) {
+  constructor(readonly seed: number) {
     this.physics = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     this.physics.timestep = 1 / 60;
 
@@ -91,13 +101,14 @@ export class World {
       const t = s.type;
       const inst = used[t.id]++;
       this.objs.push({
-        type: t, inst, body: null, alive: true, falling: -1, mover: s.mover,
+        idx: this.objs.length, type: t, inst, body: null, alive: true, falling: -1, mover: s.mover,
         homeX: s.x, homeZ: s.z, x: s.x, y: t.hh, z: s.z, vx: 0, vz: 0,
         q: new THREE.Quaternion().setFromAxisAngle(_up, s.rot), dirty: true,
       });
       this.meshes[t.id].setColorAt(inst, col.setHex(s.color));
     }
     for (const m of this.meshes) if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    this.movers = this.objs.filter((o) => o.mover);
     this.collectObstacles();
     this.sync();
   }
@@ -275,11 +286,79 @@ export class World {
       }
       o.dirty = true;
     }
-    this.updateRighting(dt);
+    this.updateRighting(dt, t);
+  }
+
+  // ---------- Netz ----------
+  /** Host: Positionen aller gerade fahrenden/laufenden Objekte (Int16, 1/50 Einheit) */
+  packMovers() {
+    const a = new Int16Array(this.movers.length * 2);
+    this.movers.forEach((o, i) => {
+      const moving = o.alive && o.mover && !o.body;
+      a[i * 2] = moving ? Math.round(o.x * POS_Q) : NO_POS;
+      a[i * 2 + 1] = moving ? Math.round(o.z * POS_Q) : NO_POS;
+    });
+    return a;
+  }
+
+  /** Client: Mover-Paket vom Host übernehmen */
+  applyMovers(a: Int16Array, now: number) {
+    if (a.length !== this.movers.length * 2) return;
+    this.movers.forEach((o, i) => {
+      if (a[i * 2] === NO_POS) { o.net = undefined; return; }
+      const x = a[i * 2] / POS_Q, z = a[i * 2 + 1] / POS_Q, n = o.net;
+      if (n && now > n.at && Math.hypot(x - n.x, z - n.z) < 12) {
+        const dt = Math.max(0.05, now - n.at);
+        n.vx = (x - n.x) / dt; n.vz = (z - n.z) / dt; n.x = x; n.z = z; n.at = now;
+      } else {
+        o.net = { x, z, vx: 0, vz: 0, at: now };
+        if (!o.body && o.mover) { o.x = x; o.z = z; } // Sprung (z. B. Auto am Kartenrand)
+      }
+    });
+  }
+
+  /** Client: Verkehr folgt dem Host (mit Extrapolation), statt selbst zu simulieren */
+  stepNetMovers(dt: number, t: number, now: number) {
+    this.time = t;
+    const k = 1 - Math.exp(-dt * 12);
+    for (const o of this.movers) {
+      const n = o.net, m = o.mover;
+      if (!o.alive || !n || !m || o.body) continue;
+      const age = Math.min(0.3, now - n.at);
+      const ox = o.x, oz = o.z;
+      o.x += (n.x + n.vx * age - o.x) * k;
+      o.z += (n.z + n.vz * age - o.z) * k;
+      if (m.kind === 'walk') {
+        const vx = (o.x - ox) / dt, vz = (o.z - oz) / dt;
+        if (vx * vx + vz * vz > 0.04) m.heading = Math.atan2(vx, vz);
+        o.q.setFromAxisAngle(_up, m.heading + Math.sin(t * 9 + o.inst) * 0.1);
+        o.y = o.type.hh + Math.abs(Math.sin(t * 9 + o.inst)) * 0.06;
+      }
+      o.vx = n.vx; o.vz = n.vz;
+      o.dirty = true;
+    }
+    this.updateRighting(dt, t);
+  }
+
+  /** Host-Wechsel: ab jetzt wieder selbst simulieren */
+  resumeMovers() { for (const o of this.movers) o.net = undefined; }
+
+  /** Bitmaske der gefressenen Objekte (für Spieler, die mitten in der Runde einsteigen) */
+  deadMask() {
+    const b = new Uint8Array(Math.ceil(this.objs.length / 8));
+    for (const o of this.objs) if (!o.alive) b[o.idx >> 3] |= 1 << (o.idx & 7);
+    return b;
+  }
+
+  applyDeadMask(b: Uint8Array) {
+    let pts = 0;
+    for (const o of this.objs) if (b[o.idx >> 3] & (1 << (o.idx & 7))) { if (o.alive) this.remove(o); pts += o.type.points; }
+    return pts;
   }
 
   /** Umgekippte Objekte richten sich langsam wieder auf (mit kleinem Hüpfer) */
-  private updateRighting(dt: number) {
+  updateRighting(dt: number, t: number) {
+    this.time = t;
     for (const [o, at] of this.righting) {
       if (!o.alive || o.body) { this.righting.delete(o); continue; }
       if (this.time < at) continue;

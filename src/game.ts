@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { World, MAX_HOLES, type Obj } from './world';
-import { Hole } from './hole';
+import { Hole, cleanName, cleanColor } from './hole';
 import { HALF, ROADS } from './city';
 import { Sfx } from './sfx';
 import { xray } from './objects';
 import { SKINS, STAR_STEPS, starsFor, escapeHtml, type Mode } from './config';
+import type { Net, Welcome, Ev, State } from './net';
 
 export const ROUND_TIME = 120;
 
@@ -54,6 +55,10 @@ export class Game {
   ground!: THREE.Mesh;
   holeUniforms = Array.from({ length: MAX_HOLES }, () => new THREE.Vector4());
   sfx = new Sfx();
+  /** Mehrspieler (null, solange nicht geladen) */
+  net: Net | null = null;
+  /** Pausenmenü offen – online läuft das Spiel dabei weiter */
+  menuPaused = false;
 
   running = false;
   paused = false;
@@ -131,14 +136,15 @@ export class Game {
   }
 
   /** Neue Runde: Stadt, Physik und Löcher neu aufbauen */
-  setup(playerName: string, skin: number, mode: Mode = 'battle') {
+  setup(playerName: string, skin: number, mode: Mode = 'battle', w?: Welcome) {
     this.mode = mode;
+    this.menuPaused = false;
     if (this.world) {
       this.scene.remove(this.world.group, this.ground);
       for (const h of this.holes) h.dispose(this.scene);
       this.world.dispose();
     }
-    const seed = (Math.random() * 1e9) | 0;
+    const seed = w ? w.seed : (Math.random() * 1e9) | 0;
     this.world = new World(seed);
     this.scene.add(this.world.group);
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2).rotateX(-Math.PI / 2), groundMaterial(this.holeUniforms, { map: this.world.groundTex }));
@@ -146,9 +152,31 @@ export class Game {
     this.scene.add(this.ground);
 
     this.holes = [];
+    this.timeLeft = ROUND_TIME;
+    this.totalPoints = this.world.objs.reduce((a, o) => a + o.type.points, 0);
+    this.eatenPoints = 0;
+    if (w) {
+      // Einstieg in eine laufende Runde eines anderen Spielers
+      w.holes.forEach((info, i) => {
+        const me = i === w.slot;
+        const h = new Hole(i, cleanName(info.name), cleanColor(info.color), me, this.world.physics, this.scene);
+        h.ctrl = me ? 'local' : 'net';
+        h.peer = typeof info.peer === 'string' ? info.peer : null;
+        h.setStats(info.level, info.xp, info.score, info.kills);
+        h.respawn(Number(info.x) || 0, Number(info.z) || 0, h.level);
+        h.setStats(info.level, info.xp, info.score, info.kills);
+        h.setNet(info.x, info.z, 0, 0, performance.now() / 1000);
+        if (!info.alive) { h.die(); h.outAt = -1; }
+        this.holes.push(h);
+      });
+      this.player = this.holes[w.slot];
+      this.timeLeft = Math.min(ROUND_TIME, Number(w.left) || 0);
+      const bin = Uint8Array.from(atob(w.dead), (c) => c.charCodeAt(0));
+      this.eatenPoints = this.world.applyDeadMask(bin);
+    }
     const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
     const colors = SKINS.filter((c) => c !== skin).sort(() => Math.random() - 0.5);
-    const n = mode === 'solo' ? 1 : MAX_HOLES;
+    const n = w ? 0 : mode === 'solo' ? 1 : MAX_HOLES;
     for (let i = 0; i < n; i++) {
       const me = i === 0;
       const h = new Hole(i, me ? playerName : names[i - 1], me ? skin : colors[(i - 1) % colors.length], me, this.world.physics, this.scene);
@@ -158,10 +186,7 @@ export class Game {
       h.respawn(x, z, 0);
       this.holes.push(h);
     }
-    this.player = this.holes[0];
-    this.timeLeft = ROUND_TIME;
-    this.totalPoints = this.world.objs.reduce((a, o) => a + o.type.points, 0);
-    this.eatenPoints = 0;
+    if (!w) this.player = this.holes[0];
     this.popAcc = 0;
     this.acc = 0;
     this.camH = 36;
@@ -183,12 +208,12 @@ export class Game {
     return best;
   }
 
-  start() {
+  start(cd = 3) {
     this.running = true;
-    this.countdown = 3;
+    this.countdown = cd;
     this.sfx.resume();
     this.sfx.tick(false);
-    this.showCount('3');
+    this.showCount(String(Math.ceil(cd)));
   }
 
   private showCount(txt: string) {
@@ -247,7 +272,7 @@ export class Game {
     }
     // konstantes Tempo: nur die Richtung zählt
     const l = Math.hypot(dx, dz);
-    if (l < dead) { dx = 0; dz = 0; } else { dx /= l; dz /= l; }
+    if (l < dead || this.menuPaused) { dx = 0; dz = 0; } else { dx /= l; dz /= l; }
     this.player.dirX = dx; this.player.dirZ = dz;
   }
 
@@ -301,7 +326,8 @@ export class Game {
   }
 
   // ---------------- Spiellogik ----------------
-  private swallow(dt: number) {
+  /** auth = dieses Gerät entscheidet (offline/Host). Als Client nur Optik: Punkte kommen vom Host. */
+  private swallow(dt: number, auth = true) {
     const w = this.world;
     for (const o of w.objs) {
       if (!o.alive) continue;
@@ -309,7 +335,7 @@ export class Game {
       if (o.falling >= 0) {
         const h = this.holes[o.falling];
         if (!h.alive) { if (o.y < -0.5) w.remove(o); else w.deactivate(o); continue; }
-        if (o.y < h.killY) { this.eat(h, o); continue; }
+        if (o.y < h.killY) { if (auth) this.eat(h, o); else w.remove(o); continue; }
         // Loch ist weitergezogen und das Objekt steht noch oben -> wieder einfrieren
         const dx = o.x - h.x, dz = o.z - h.z, lim = h.r + ro + 2.5;
         if (o.y > -0.2 && dx * dx + dz * dz > lim * lim) w.deactivate(o);
@@ -323,6 +349,7 @@ export class Game {
         if (dx * dx + dz * dz < lim * lim) { w.activate(o, h.id); break; }
       }
     }
+    if (!auth) return;
     // Löcher fressen Löcher
     for (const a of this.holes) {
       if (!a.alive) continue;
@@ -346,23 +373,35 @@ export class Game {
   private eat(h: Hole, o: Obj) {
     this.world.remove(o);
     const up = h.gain(o.type.points);
-    this.eatenPoints += o.type.points;
+    this.net?.emit(['e', o.idx, h.id, o.type.points]);
+    this.eaten(h, o, o.type.points);
+    if (up && h.isPlayer) this.levelUpFx(h);
+  }
+
+  /** Rückmeldung fürs Fressen (lokal entschieden oder vom Host gemeldet) */
+  private eaten(h: Hole, o: Obj, pts: number) {
+    this.eatenPoints += pts;
     if (h.isPlayer) {
-      this.popAcc += o.type.points;
+      this.popAcc += pts;
       this.sfx.gulp(o.type.weight);
       if (o.type.weight >= 1.5) navigator.vibrate?.(Math.min(60, 10 * o.type.weight));
-      if (up) { this.sfx.levelUp(); this.toast(`LEVEL ${h.level + 1}!`); }
     }
   }
 
-  private eatHole(a: Hole, b: Hole) {
+  private levelUpFx(h: Hole) { this.sfx.levelUp(); this.toast(`LEVEL ${h.level + 1}!`); }
+
+  private eatHole(a: Hole, b: Hole, auth = true) {
     b.die(a);
     b.respawnIn = 3;
     b.outAt = this.t;
-    a.kills++;
-    const bonus = 25 + Math.round(b.score * 0.25);
-    a.gain(bonus);
-    if (a.isPlayer) { this.popAcc += bonus; this.toast(`${b.name} verschlungen! 😈`); this.sfx.levelUp(); navigator.vibrate?.([30, 40, 60]); }
+    if (auth) {
+      a.kills++;
+      const bonus = 25 + Math.round(b.score * 0.25);
+      a.gain(bonus);
+      this.net?.emit(['k', a.id, b.id]);
+      if (a.isPlayer) this.popAcc += bonus;
+    }
+    if (a.isPlayer) { this.toast(`${b.name} verschlungen! 😈`); this.sfx.levelUp(); navigator.vibrate?.([30, 40, 60]); }
     if (b.isPlayer) {
       this.toast(`${a.name} hat dich gefressen!`); this.sfx.hurt(); navigator.vibrate?.(200);
       setTimeout(() => this.running && this.finish(), 1200);
@@ -370,6 +409,50 @@ export class Game {
     if (this.running && this.player.alive && this.holes.filter((h) => h.alive).length === 1) {
       this.toast('Letztes Loch! 🏆');
       setTimeout(() => this.running && this.finish(), 1200);
+    }
+  }
+
+  // ---------------- Netz (Client) ----------------
+  applyNetState(s: State) {
+    const now = performance.now() / 1000;
+    this.timeLeft = Math.min(ROUND_TIME, Number(s.left) || 0);
+    if (!Array.isArray(s.h)) return;
+    s.h.forEach((d, i) => {
+      const h = this.holes[i];
+      if (!h || !Array.isArray(d)) return;
+      if (!h.isPlayer) h.setNet(d[0], d[1], d[2], d[3], now);
+      const before = h.level;
+      h.setStats(d[4], d[5], d[6], d[8]);
+      if (h.isPlayer && h.level > before) this.levelUpFx(h);
+      if (!d[7] && h.alive) {
+        h.die(); h.outAt = this.t;
+        if (h.isPlayer) setTimeout(() => this.running && this.finish(), 1200);
+      }
+    });
+  }
+
+  applyNetEvent(e: Ev) {
+    switch (e[0]) {
+      case 'e': {
+        const o = this.world.objs[e[1]], h = this.holes[e[2]];
+        if (!o || !h) return;
+        if (o.alive) this.world.remove(o);
+        this.eaten(h, o, Math.max(0, Math.min(1e5, Number(e[3]) || 0)));
+        break;
+      }
+      case 'k': {
+        const a = this.holes[e[1]], b = this.holes[e[2]];
+        if (a && b && b.alive) this.eatHole(a, b, false);
+        break;
+      }
+      case 'id': {
+        const h = this.holes[e[1]];
+        if (!h) return;
+        h.setIdentity(e[2], e[3]);
+        h.peer = typeof e[4] === 'string' ? e[4] : null;
+        break;
+      }
+      case 'end': if (this.running) this.finish(); break;
     }
   }
 
@@ -383,6 +466,7 @@ export class Game {
   // ---------------- Frame ----------------
   /** Hintergrund-Demo fürs Menü: Bots spielen, kein Spieler */
   demo() {
+    this.net?.leaveRound();
     this.running = false;
     this.paused = false;
     this.setup('', SKINS[0]);
@@ -391,16 +475,21 @@ export class Game {
 
   setPaused(p: boolean) {
     if (!this.running) p = false;
-    this.paused = p;
+    this.menuPaused = p;
+    // online lässt sich die Welt nicht anhalten – nur die eigene Eingabe ruht
+    this.paused = p && !this.net?.online;
     this.ptr = null;
     this.keys.clear();
   }
 
   frame(dt: number) {
     dt = Math.min(dt, 0.1);
+    this.net?.tick(dt);
     if (this.paused) { this.renderer.render(this.scene, this.camera); return; }
     this.t += dt;
-    if (this.running && this.countdown > 0) {
+    if (this.running && this.net?.role === 'client') {
+      this.clientFrame(dt);
+    } else if (this.running && this.countdown > 0) {
       const before = Math.ceil(this.countdown);
       this.countdown -= dt;
       const now = Math.ceil(this.countdown);
@@ -414,7 +503,7 @@ export class Game {
     } else if (this.running) {
       this.timeLeft -= dt;
       this.readInput();
-      for (const h of this.holes) if (!h.isPlayer && h.alive) this.think(h, dt);
+      for (const h of this.holes) if (h.ctrl === 'ai' && h.alive) this.think(h, dt);
       for (const h of this.holes) h.update(dt, HALF);
       this.world.updateMovers(dt, this.t);
       // Physik mit festem Zeitschritt
@@ -456,6 +545,34 @@ export class Game {
     this.updateXray();
     this.renderer.render(this.scene, this.camera);
     this.updateHud(dt);
+  }
+
+  /** Client: eigenes Loch lokal, alles andere folgt dem Host; Physik nur für die Optik */
+  private clientFrame(dt: number) {
+    if (this.countdown > 0) {
+      const before = Math.ceil(this.countdown);
+      this.countdown -= dt;
+      const now = Math.ceil(this.countdown);
+      if (now !== before) {
+        if (now > 0) { this.showCount(String(now)); this.sfx.tick(false); }
+        else { this.showCount('LOS!'); this.sfx.tick(true); }
+      }
+      this.player.dirX = this.player.dirZ = 0;
+    } else this.readInput();
+    this.timeLeft -= dt;
+    for (const h of this.holes) h.update(dt, HALF);
+    this.world.stepNetMovers(dt, this.t, performance.now() / 1000);
+    this.acc += dt;
+    let steps = 0;
+    while (this.acc >= 1 / 60 && steps < 4) {
+      this.world.suction(this.holes, 1 / 60);
+      this.world.physics.step(); this.acc -= 1 / 60; steps++;
+    }
+    if (steps === 4) this.acc = 0;
+    this.world.sync();
+    this.swallow(dt, false);
+    // Host meldet das Ende; falls er dabei verloren ging, nicht ewig weiterlaufen
+    if (this.timeLeft < -3) this.finish();
   }
 
   private snapCamera() { this.updateCamera(1, true); }
@@ -563,6 +680,7 @@ export class Game {
   }
 
   private finish() {
+    this.net?.leaveRound(this.timeLeft <= 0.5);
     this.running = false;
     this.ptr = null;
     $('count').classList.remove('go');

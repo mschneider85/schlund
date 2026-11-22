@@ -45,14 +45,21 @@ applyMute();
 const show = (id: string, on: boolean) => $(id).classList.toggle('hidden', !on);
 
 let wakeLock: { release(): Promise<void> } | null = null;
+let starting = false;
 const play = async () => {
-  if (!game) return;
+  if (!game || starting) return;
+  starting = true;
   const n = name.value.trim() || 'Du';
   store.set('name', name.value.trim());
-  game.setup(n, skin, mode);
+  // Battle: still nach einer laufenden Runde echter Spieler suchen, sonst selbst eine eröffnen
+  const net = mode === 'battle' ? game.net : null;
+  const w = net ? await net.findMatch(n, skin).catch(() => null) : null;
+  starting = false;
+  game.setup(n, skin, mode, w ?? undefined);
+  if (net && !w) net.becomeHost();
   show('menu', false); show('over', false); show('pause', false); show('hud', true);
   $('hud').classList.toggle('solo', mode === 'solo');
-  game.start();
+  game.start(w && w.cd > 0.3 ? w.cd : 3);
   try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
 };
 const toMenu = () => {
@@ -76,9 +83,14 @@ $('quit').onclick = () => { game?.setPaused(false); game?.demo(); wakeLock?.rele
 addEventListener('keydown', (e) => {
   if (!$('over').classList.contains('hidden') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); play(); return; }
   if (!game?.running) return;
-  if (e.key === 'Escape' || e.key.toLowerCase() === 'p') pause(!game.paused);
+  if (e.key === 'Escape' || e.key.toLowerCase() === 'p') pause(!game.menuPaused);
 });
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(true); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) return;
+  // Im Hintergrund rechnet der Browser nicht weiter: als Host die Runde an die anderen abgeben
+  if (game?.net?.role === 'host') game.net.leaveRound();
+  pause(true);
+});
 
 async function boot() {
   // Three.js + Physik (Rust -> WebAssembly SIMD) laden, während das Menü schon bedienbar ist
@@ -111,6 +123,9 @@ async function boot() {
   };
 
   if (import.meta.env.DEV) (window as any).game = g;
+
+  // Mehrspieler im Hintergrund – wenn es nicht klappt, merkt man nichts (Bots)
+  import('./net').then(({ Net }) => { g.net = new Net(g); }).catch((e) => console.warn('offline', e));
 
   g.demo(); // Hintergrund-Demo im Menü
   const btn = $<HTMLButtonElement>('play');
