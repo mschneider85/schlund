@@ -3,9 +3,9 @@ import RAPIER from '@dimforge/rapier3d-simd';
 import { gFall, gPit, groups } from './world';
 
 /** XP, die für den nächsten Level nötig sind */
-export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.42, lvl));
+export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.48, lvl));
 export const radiusFor = (lvl: number) => 1.15 * Math.pow(1.22, lvl);
-export const MAX_LEVEL = 14;
+export const MAX_LEVEL = 16;
 
 const pitGeo = new THREE.CylinderGeometry(1, 1, 1, 56, 1, false).translate(0, -0.5, 0);
 const pitMat = new THREE.ShaderMaterial({

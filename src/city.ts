@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { T, BUILDINGS, type ObjType } from './objects';
 
 // kompakte Karte: in 2 Minuten soll man einen Großteil der Stadt schaffen
-export const HALF = 82; // Karte: [-HALF, HALF]²
-export const ROADS = [-60, -20, 20, 60];
+export const HALF = 102; // Karte: [-HALF, HALF]²
+export const ROADS = [-80, -40, 0, 40, 80];
 export const ROAD_HW = 4.5; // halbe Fahrbahnbreite
 export const WALK_HW = 6.5; // inkl. Gehweg
 
@@ -57,7 +57,7 @@ export function generateCity(seed: number): { spawns: Spawn[]; ground: THREE.Can
   }
 
   // ---------- Bodentextur ----------
-  const PX = 2048, S = PX / (HALF * 2);
+  const PX = 2560, S = PX / (HALF * 2);
   const cv = document.createElement('canvas');
   cv.width = cv.height = PX;
   const g = cv.getContext('2d')!;
