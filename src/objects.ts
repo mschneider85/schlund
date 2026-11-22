@@ -232,7 +232,8 @@ function objMaterial(map?: THREE.Texture): THREE.MeshLambertMaterial {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true, map: map ?? null });
   m.onBeforeCompile = (s) => {
     s.uniforms.uXray = xray;
-    s.vertexShader = 'attribute float tint;\nvarying float vWY;\n' + s.vertexShader
+    // fall (je Instanz): 1 = kippt/fällt gerade ins Loch -> nie durchsichtig
+    s.vertexShader = 'attribute float tint;\nattribute float fall;\nvarying float vWY;\nvarying float vFall;\n' + s.vertexShader
       .replace('#include <color_vertex>', `
         vColor = vec4(1.0);
         #ifdef USE_COLOR
@@ -246,10 +247,12 @@ function objMaterial(map?: THREE.Texture): THREE.MeshLambertMaterial {
         #ifdef USE_INSTANCING
           wpY = instanceMatrix * wpY;
         #endif
-        vWY = (modelMatrix * wpY).y;`);
-    s.fragmentShader = 'uniform vec3 uXray;\nvarying float vWY;\n' + s.fragmentShader
+        vWY = (modelMatrix * wpY).y;
+        vFall = fall;`);
+    s.fragmentShader = 'uniform vec3 uXray;\nvarying float vWY;\nvarying float vFall;\n' + s.fragmentShader
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
-        if (uXray.z > 0.0 && vWY > 1.2) {
+        // nur ruhende, verdeckende Objekte rastern – was ins Loch kippt, bleibt massiv
+        if (uXray.z > 0.0 && vWY > 1.2 && vFall < 0.5) {
           float xd = distance(gl_FragCoord.xy, uXray.xy);
           if (xd < uXray.z && mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
         }`)

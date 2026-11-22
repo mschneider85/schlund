@@ -98,6 +98,10 @@ export class World {
       mesh.receiveShadow = true;
       mesh.frustumCulled = false;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      // je Instanz: fällt gerade (dann keine Röntgen-Durchsicht)
+      const fall = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(1, counts[t.id])), 1);
+      fall.setUsage(THREE.DynamicDrawUsage);
+      t.geo.setAttribute('fall', fall);
       this.meshes.push(mesh);
       this.group.add(mesh);
     }
@@ -154,6 +158,7 @@ export class World {
     for (const cd of o.type.colliders()) this.physics.createCollider(cd.setCollisionGroups(groupsFalling(i)), b);
     o.body = b;
     o.vx = o.vz = 0;
+    this.setFall(o, 1);
     this.active.add(o);
     this.righting.delete(o);
   }
@@ -196,6 +201,7 @@ export class World {
     this.active.delete(o);
     o.falling = -1;
     o.dirty = true;
+    this.setFall(o, 0);
     // aufrecht stehende Fußgänger/Autos fahren weiter, umgekippte stellen sich bald wieder auf
     const upright = _p.set(0, 1, 0).applyQuaternion(o.q).y > 0.97;
     if (upright && o.savedMover && canResume(o, o.savedMover)) {
@@ -229,6 +235,12 @@ export class World {
       b.setNextKinematicTranslation({ x: o.x, y: o.y, z: o.z });
       b.setNextKinematicRotation({ x: o.q.x, y: o.q.y, z: o.q.z, w: o.q.w });
     }
+  }
+
+  private setFall(o: Obj, v: number) {
+    const a = o.type.geo.getAttribute('fall') as THREE.InstancedBufferAttribute;
+    a.setX(o.inst, v);
+    a.needsUpdate = true;
   }
 
   remove(o: Obj) {
