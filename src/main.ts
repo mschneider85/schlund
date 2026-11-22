@@ -1,6 +1,7 @@
 import './style.css';
 import { MODE_NAMES, starsFor, escapeHtml, type Mode } from './config';
 import type { Game } from './game';
+import type { Welcome } from './net';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const store = {
@@ -46,8 +47,27 @@ const play = async () => {
   const net = mode === 'battle' ? game.net : null;
   const w = net ? await net.findMatch(n).catch(() => null) : null;
   starting = false;
+  begin(n, w);
+  // noch niemand gefunden: sofort selbst starten und in den ersten Sekunden weiter Ausschau halten
+  if (net && !w) lateJoin(n, ++round);
+  try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
+};
+let round = 0;
+async function lateJoin(n: string, id: number) {
+  const t0 = performance.now();
+  while (id === round && game?.running && game.net?.role === 'host' && performance.now() - t0 < 12000) {
+    await new Promise((r) => setTimeout(r, 400));
+    const w = await game.net.lateMatch(n).catch(() => null);
+    if (!w) continue;
+    if (id === round && game.running) begin(n, w);
+    else game.net.cancelJoin(w);
+    return;
+  }
+}
+function begin(n: string, w: Welcome | null) {
+  if (!game) return;
   game.setup(n, mode, w ?? undefined);
-  if (net && !w) net.becomeHost();
+  if (game.net && !w && mode === 'battle') game.net.becomeHost();
   // Solo lässt sich anhalten; im Battle läuft die Welt weiter (echte Mitspieler) – dort nur „Verlassen“
   const solo = mode === 'solo';
   $('btnpause').textContent = solo ? '⏸' : '✕';
@@ -58,8 +78,7 @@ const play = async () => {
   show('menu', false); show('over', false); show('pause', false); show('hud', true);
   $('hud').classList.toggle('solo', mode === 'solo');
   game.start(w && w.cd > 0.3 ? w.cd : 3);
-  try { wakeLock = await (navigator as any).wakeLock?.request('screen'); } catch { /* egal */ }
-};
+}
 const toMenu = () => {
   show('over', false); show('pause', false); show('hud', false); show('menu', true);
   showBest();
@@ -77,7 +96,7 @@ const pause = (on: boolean) => {
 };
 $('btnpause').onclick = () => pause(true);
 $('resume').onclick = () => pause(false);
-$('quit').onclick = () => { game?.setPaused(false); game?.demo(); wakeLock?.release().catch(() => {}); wakeLock = null; toMenu(); };
+$('quit').onclick = () => { round++; game?.setPaused(false); game?.demo(); wakeLock?.release().catch(() => {}); wakeLock = null; toMenu(); };
 addEventListener('keydown', (e) => {
   if (!$('over').classList.contains('hidden') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); play(); return; }
   if (!game?.running) return;
@@ -86,7 +105,8 @@ addEventListener('keydown', (e) => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) return;
   // Im Hintergrund rechnet der Browser nicht weiter: als Host die Runde an die anderen abgeben
-  if (game?.net?.role === 'host') game.net.leaveRound();
+  // (Chrome meldet auch ein komplett verdecktes Fenster als versteckt – deshalb erst nach 5 s)
+  if (game?.net?.role === 'host') setTimeout(() => { if (document.hidden && game?.net?.role === 'host') game.net.leaveRound(); }, 5000);
   if (game?.mode === 'solo') pause(true);
 });
 

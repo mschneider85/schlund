@@ -24,7 +24,7 @@ export interface Welcome {
   /** Bitmaske der gefressenen Objekte (Base64) */
   dead: string;
 }
-interface Presence { st: 'idle' | 'host' | 'client'; left?: number; free?: number; n?: number }
+interface Presence { st: 'idle' | 'host' | 'client'; left?: number; free?: number; n?: number; at?: number }
 /** Ereignisse vom Host: gefressen, Loch gefressen, Besitzerwechsel, Rundenende */
 type Ev =
   | ['e', number, number, number]
@@ -60,7 +60,8 @@ export class Net {
   private evQ: Ev[] = [];
   private stT = 0; private mvT = 0; private inT = 0; private hiT = 0;
   private lastSt = 0;
-  private born = now();
+  /** läuft gerade eine Beitrittsanfrage (dann selbst niemanden aufnehmen – sonst treten sich zwei gegenseitig bei) */
+  private joining = false;
 
   constructor(private game: Game) {
     const room = (this.room = joinRoom({ appId: APP, identity: 'none' }, 'battle'));
@@ -77,7 +78,11 @@ export class Net {
     room.onPeerLeave(({ peerId }) => { this.peers.delete(peerId); this.left(peerId); });
     room.onError(() => { /* Signaling-Probleme: dann eben offline */ });
 
-    this.aHi.onMessage((p: Presence, { peerId }) => { this.peers.set(peerId, p); });
+    this.aHi.onMessage((p: Presence, { peerId }) => {
+      if (!p || typeof p !== 'object') return;
+      p.at = now(); // Empfangszeit: Restzeit altert bis zur nächsten Meldung mit
+      this.peers.set(peerId, p);
+    });
     this.aJoin.onRequest((req: { name: string }, { peerId }) => this.admit(peerId, req));
     this.aSt.onMessage((s: State, { peerId }) => {
       if (this.role !== 'client' || !this.inRound(peerId)) return;
@@ -123,22 +128,51 @@ export class Net {
   // ---------- Einstieg ----------
   /** Laufende Runde zum Mitspielen suchen. null = keine gefunden -> selbst hosten */
   async findMatch(name: string): Promise<Welcome | null> {
-    // Direkt nach dem Laden kennt man die anderen noch nicht: kurz auf die Suche warten
-    while (now() - this.born < 7 && !this.openHosts().length) await new Promise((r) => setTimeout(r, 150));
-    const hosts = this.openHosts();
-    for (const [peerId] of hosts.slice(0, 2)) {
-      try {
-        const w = await this.aJoin.request({ name }, { target: peerId, timeoutMs: 2500 }) as Welcome | null;
-        if (w && w.holes) { this.role = 'client'; this.host = peerId; this.lastSt = now(); return w; }
-      } catch { /* nächster */ }
-    }
-    return null;
+    return this.tryJoin(name, this.openHosts());
   }
+
+  /**
+   * Eigene Runde läuft erst kurz und noch ohne Mitspieler: taucht eine ältere Runde auf, still dorthin
+   * wechseln. Ältere Runde gewinnt (bei Gleichstand die kleinere ID), damit nur einer wechselt.
+   */
+  async lateMatch(name: string): Promise<Welcome | null> {
+    const g = this.game;
+    if (this.role !== 'host' || this.humans().length || !g.running) return null;
+    const mine = g.timeLeft + g.countdown;
+    const older = this.openHosts().filter(([id, p]) => {
+      const left = this.leftOf(p);
+      return left < mine - 1 || (Math.abs(left - mine) <= 1 && id < this.self);
+    });
+    if (!older.length) return null;
+    const w = await this.tryJoin(name, older);
+    return w;
+  }
+
+  private async tryJoin(name: string, hosts: [string, Presence][]): Promise<Welcome | null> {
+    this.joining = true;
+    try {
+      for (const [peerId] of hosts.slice(0, 2)) {
+        try {
+          const w = await this.aJoin.request({ name }, { target: peerId, timeoutMs: 2500 }) as Welcome | null;
+          if (w && w.holes) { this.role = 'client'; this.host = peerId; this.lastSt = now(); return w; }
+        } catch { /* nächster */ }
+      }
+      return null;
+    } finally { this.joining = false; }
+  }
+
+  /** Beitritt kam zu spät (Runde schon verlassen): beim Host wieder abmelden */
+  cancelJoin(w: Welcome) {
+    this.send(this.aBye, 1, w.host);
+    this.role = 'off'; this.host = '';
+  }
+
+  private leftOf(p: Presence) { return (p.left ?? 0) - (now() - (p.at ?? now())); }
 
   /** Runden, in die man einsteigen kann (meiste Spieler, dann meiste Restzeit zuerst) */
   private openHosts() {
-    return [...this.peers].filter(([, p]) => p.st === 'host' && (p.left ?? 0) > 45 && (p.free ?? 0) > 0)
-      .sort((a, b) => (b[1].n ?? 0) - (a[1].n ?? 0) || (b[1].left ?? 0) - (a[1].left ?? 0));
+    return [...this.peers].filter(([, p]) => p.st === 'host' && this.leftOf(p) > 45 && (p.free ?? 0) > 0)
+      .sort((a, b) => (b[1].n ?? 0) - (a[1].n ?? 0) || this.leftOf(b[1]) - this.leftOf(a[1]));
   }
 
   /** Diagnose (Seite mit ?debug öffnen) */
@@ -146,7 +180,7 @@ export class Net {
     const peers = this.room.getPeers();
     return [`Version ${APP.slice(-10)}  ich ${this.self.slice(0, 6)}  Rolle ${this.role}${this.host ? ' → ' + this.host.slice(0, 6) : ''}`,
       `verbunden: ${Object.keys(peers).length}`,
-      ...[...this.peers].map(([id, p]) => `  ${id.slice(0, 6)} ${p.st}${p.st === 'host' ? ` ${Math.round(p.left ?? 0)}s frei ${p.free} Spieler ${p.n}` : ''}${peers[id]?.direct === false ? ' (Relay)' : ''}`),
+      ...[...this.peers].map(([id, p]) => `  ${id.slice(0, 6)} ${p.st}${p.st === 'host' ? ` ${Math.round(this.leftOf(p))}s frei ${p.free} Spieler ${p.n}` : ''}${peers[id]?.direct === false ? ' (Relay)' : ''}`),
     ].join('\n');
   }
 
@@ -160,7 +194,7 @@ export class Net {
   /** Host: neuer Spieler übernimmt ein Bot-Loch */
   private admit(peerId: string, req: { name: string }): Welcome | null {
     const g = this.game;
-    if (this.role !== 'host' || !g.running || g.mode !== 'battle' || g.timeLeft < 40 || !g.player.alive) return null;
+    if (this.role !== 'host' || this.joining || !g.running || g.mode !== 'battle' || g.timeLeft < 40 || !g.player.alive) return null;
     if (this.holeOf(peerId)) return null;
     const bots = g.holes.filter((h) => h.alive && !h.peer && h.ctrl === 'ai');
     if (!bots.length) return null;
