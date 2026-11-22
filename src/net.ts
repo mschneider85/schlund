@@ -22,12 +22,14 @@ export interface HoleInfo {
   alive: boolean; x: number; z: number;
 }
 export interface Welcome {
+  /** Kennung der Runde (bleibt beim Host-Wechsel gleich) */
+  rid: string;
   seed: number; left: number; cd: number; slot: number; host: string;
   holes: HoleInfo[];
   /** Bitmaske der gefressenen Objekte (Base64) */
   dead: string;
 }
-interface Presence { st: 'idle' | 'host' | 'client'; left?: number; free?: number; n?: number; at?: number }
+interface Presence { st: 'idle' | 'host' | 'client'; rid?: string; left?: number; free?: number; n?: number; at?: number }
 /** Ereignisse vom Host: gefressen, Loch gefressen, Besitzerwechsel, Rundenende */
 type Ev =
   | ['e', number, number, number]
@@ -77,6 +79,12 @@ export class Net {
   private lastSt = 0;
   /** läuft gerade eine Beitrittsanfrage (dann selbst niemanden aufnehmen – sonst treten sich zwei gegenseitig bei) */
   private joining = false;
+  /** aktuelle Runde */
+  private rid = '';
+  /** Runden, die man schon verlassen hat (gefressen/beendet) – dorthin nicht zurück */
+  private done = new Set<string>();
+  /** Host: Spieler, die diese Runde verlassen haben */
+  private outPeers = new Set<string>();
 
   constructor(private game: Game) {
     this.key = crypto.subtle.digest('SHA-256', new TextEncoder().encode(APP))
@@ -203,7 +211,7 @@ export class Net {
   private presence(): Presence {
     const g = this.game;
     if (this.role === 'host' && g.running) {
-      return { st: 'host', left: r2(g.timeLeft), free: g.holes.filter((h) => h.alive && !h.peer && h.ctrl === 'ai').length, n: this.humans().length + 1 };
+      return { st: 'host', rid: this.rid, left: r2(g.timeLeft), free: g.holes.filter((h) => h.alive && !h.peer && h.ctrl === 'ai').length, n: this.humans().length + 1 };
     }
     return { st: this.role === 'client' ? 'client' : 'idle' };
   }
@@ -241,7 +249,7 @@ export class Net {
           setTimeout(() => res(null), 3500); // über MQTT etwas langsamer
         });
         this.pending.delete(rid);
-        if (w && Array.isArray(w.holes)) { this.role = 'client'; this.host = peerId; this.lastSt = now(); return w; }
+        if (w && Array.isArray(w.holes)) { this.role = 'client'; this.host = peerId; this.rid = String(w.rid); this.lastSt = now(); return w; }
       }
       return null;
     } finally { this.joining = false; }
@@ -249,6 +257,7 @@ export class Net {
 
   /** Beitritt kam zu spät (Runde schon verlassen): beim Host wieder abmelden */
   cancelJoin(w: Welcome) {
+    this.done.add(String(w.rid));
     this.sendTo('bye', 1, w.host);
     this.role = 'off'; this.host = '';
   }
@@ -257,7 +266,7 @@ export class Net {
 
   /** Runden, in die man einsteigen kann (meiste Spieler, dann meiste Restzeit zuerst) */
   private openHosts(): [string, Presence][] {
-    return [...this.peers].filter(([id, { p }]) => this.alive(id) && p.st === 'host' && this.leftOf(p) > 45 && (Number(p.free) || 0) > 0)
+    return [...this.peers].filter(([id, { p }]) => this.alive(id) && p.st === 'host' && !this.done.has(String(p.rid)) && this.leftOf(p) > 45 && (Number(p.free) || 0) > 0)
       .map(([id, { p }]) => [id, p] as [string, Presence])
       .sort((a, b) => (Number(b[1].n) || 0) - (Number(a[1].n) || 0) || this.leftOf(b[1]) - this.leftOf(a[1]));
   }
@@ -274,6 +283,8 @@ export class Net {
   /** eigene Runde: wir sind Host, andere können einsteigen */
   becomeHost() {
     this.role = 'host';
+    this.rid = Math.random().toString(36).slice(2, 12);
+    this.outPeers.clear();
     this.game.player.peer = this.self;
     this.hiT = 0;
   }
@@ -282,7 +293,7 @@ export class Net {
   private admit(peerId: string, req: { name: string }): Welcome | null {
     const g = this.game;
     if (this.role !== 'host' || this.joining || !g.running || g.mode !== 'battle' || g.timeLeft < 40 || !g.player.alive) return null;
-    if (this.holeOf(peerId)) return null;
+    if (this.holeOf(peerId) || this.outPeers.has(peerId)) return null;
     const bots = g.holes.filter((h) => h.alive && !h.peer && h.ctrl === 'ai');
     if (!bots.length) return null;
     // das kleinste Bot-Loch – fair für die, die schon spielen
@@ -296,7 +307,7 @@ export class Net {
     this.emit(['id', h.id, name, color, peerId]);
     this.flush();
     return {
-      seed: g.world.seed, left: g.timeLeft, cd: g.countdown, slot: h.id, host: this.self,
+      rid: this.rid, seed: g.world.seed, left: g.timeLeft, cd: g.countdown, slot: h.id, host: this.self,
       holes: g.holes.map((o) => ({
         name: o.name, color: o.color, peer: o.peer, level: o.level, xp: o.xp, score: o.score, kills: o.kills,
         alive: o.alive, x: r2(o.x), z: r2(o.z),
@@ -359,6 +370,7 @@ export class Net {
     if (!h) return;
     h.peer = null;
     if (this.role === 'host') {
+      this.outPeers.add(peer);
       // Spieler weg: sein Loch spielt als Bot weiter
       h.ctrl = 'ai'; h.aiT = 0;
       this.emit(['id', h.id, h.name, h.color, null]);
@@ -399,6 +411,8 @@ export class Net {
       if (h.ctrl === 'net') { h.ctrl = 'ai'; h.aiT = 0; }
     }
     this.game.player.peer = null;
+    if (this.rid) this.done.add(this.rid);
+    this.rid = '';
     this.role = 'off';
     this.host = '';
   }
