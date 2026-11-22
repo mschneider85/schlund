@@ -145,8 +145,8 @@ export class Hole {
   get depth() { return 3 + this.r * 2.2; }
   /** Objekt gilt als gefressen, wenn sein Zentrum tiefer ist */
   get killY() { return -(1.6 + this.r * 1.25); }
-  /** konstantes Tempo – unabhängig von der Größe */
-  get speed() { return 9.5; }
+  /** Tempo: große Löcher sind leicht schneller (wirken durch den Zoom trotzdem etwas träge) */
+  get speed() { return 9 + this.r * 0.12; }
   /** sichtbar (lebt oder wird gerade eingesaugt) */
   get visible() { return this.alive || !!this.suckBy; }
   /** Größe für die Rangliste (Level + Fortschritt zum nächsten) */
