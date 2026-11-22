@@ -3,7 +3,7 @@ import RAPIER from '@dimforge/rapier3d-simd';
 import { gFall, gPit, groups } from './world';
 
 /** XP, die für den nächsten Level nötig sind */
-export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.48, lvl));
+export const xpNext = (lvl: number) => Math.round(4 * Math.pow(1.53, lvl));
 export const radiusFor = (lvl: number) => 1.15 * Math.pow(1.22, lvl);
 export const MAX_LEVEL = 16;
 
@@ -40,6 +40,8 @@ export class Hole {
   kills = 0;
   /** Battle-Modus: endgültig ausgeschieden (Zeitpunkt für die Rangliste) */
   outAt = 0;
+  /** verbleibende Schutzzeit (s): kann nicht gefressen werden */
+  shield = 0;
   /** Puls-Animation beim Levelaufstieg */
   pulse = 0;
   /** wird gerade von einem anderen Loch eingesaugt */
@@ -203,6 +205,7 @@ export class Hole {
     const lim = limit - this.r;
     this.x = Math.max(-lim, Math.min(lim, this.x));
     this.z = Math.max(-lim, Math.min(lim, this.z));
+    this.shield = Math.max(0, this.shield - dt);
     this.r += (this.targetR - this.r) * (1 - Math.exp(-dt * 4));
     if (Math.abs(this.r - this.builtR) > this.builtR * 0.04) this.buildWalls();
     this.body.setNextKinematicTranslation({ x: this.x, y: 0, z: this.z });
@@ -221,6 +224,12 @@ export class Hole {
       this.threatRing.scale.setScalar(this.r);
     }
     this.pit.scale.set(this.r, this.depth, this.r);
+    // Schutz: Rand blinkt weiß (letzte Sekunden schneller)
+    const rm = this.rim.material as THREE.MeshBasicMaterial;
+    if (this.shield > 0 && this.alive) {
+      const on = Math.sin(this.t * (this.shield < 3 ? 22 : 11)) > 0;
+      rm.color.setHex(on ? 0xffffff : this.color);
+    } else rm.color.setHex(this.color);
     const p = 1 + Math.sin(this.pulse * Math.PI) * 0.12;
     this.rim.scale.setScalar(this.r * p);
     if (this.prog) { this.prog.scale.setScalar(this.r * p); this.prog.material.uniforms.uP.value = this.progress; }
@@ -294,6 +303,7 @@ export class Hole {
 
   respawn(x: number, z: number, level: number) {
     this.alive = true;
+    this.shield = 0;
     this.suckBy = null;
     this.pulse = 0;
     this.x = x; this.z = z; this.vx = this.vz = 0;

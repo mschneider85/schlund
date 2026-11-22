@@ -7,7 +7,9 @@ import { xray } from './objects';
 import { SKINS, STAR_STEPS, starsFor, escapeHtml, type Mode } from './config';
 import type { Net, Welcome, Ev, State } from './net';
 
-export const ROUND_TIME = 120;
+export const ROUND_TIME = 180;
+/** Schutzzeit nach Start/Einstieg: so lange kann ein Loch nicht gefressen werden */
+export const SHIELD = 10;
 
 export interface Result {
   mode: Mode;
@@ -166,6 +168,7 @@ export class Game {
         h.respawn(Number(info.x) || 0, Number(info.z) || 0, h.level);
         h.setStats(info.level, info.xp, info.score, info.kills);
         h.setNet(info.x, info.z, 0, 0, performance.now() / 1000);
+        h.shield = Math.max(0, Math.min(30, Number(info.shield) || 0));
         if (!info.alive) { h.die(); h.outAt = -1; }
         this.holes.push(h);
       });
@@ -185,6 +188,7 @@ export class Game {
       h.skill = 0.68 + Math.random() * 0.32;
       const [x, z] = this.spawnPoint(h);
       h.respawn(x, z, 0);
+      h.shield = SHIELD; // läuft erst nach dem Countdown ab
       this.holes.push(h);
     }
     if (!w) this.player = this.holes[0];
@@ -293,7 +297,7 @@ export class Game {
     // 2) Beute: kleinere Löcher
     let best = 0, bx = 0, bz = 0;
     for (const o of this.holes) {
-      if (o === h || !o.alive || h.r < o.r * (this.eatRatio + 0.05)) continue;
+      if (o === h || !o.alive || o.shield > 0 || h.r < o.r * (this.eatRatio + 0.05)) continue;
       const d = Math.hypot(o.x - h.x, o.z - h.z);
       // Bots jagen weit und gern
       const range = 70, lure = 120;
@@ -363,7 +367,7 @@ export class Game {
     for (const a of this.holes) {
       if (!a.alive) continue;
       for (const b of this.holes) {
-        if (a === b || !b.alive || a.r < b.r * this.eatRatio) continue;
+        if (a === b || !b.alive || b.shield > 0 || a.r < b.r * this.eatRatio) continue;
         const d = Math.hypot(a.x - b.x, a.z - b.z);
         if (d < a.r - b.r * 0.4) this.eatHole(a, b);
       }
@@ -432,6 +436,7 @@ export class Game {
       if (!h.isPlayer) h.setNet(d[0], d[1], d[2], d[3], now);
       const before = h.level;
       h.setStats(d[4], d[5], d[6], d[8]);
+      h.shield = Math.max(0, Math.min(30, Number(d[9]) || 0));
       if (h.isPlayer && h.level > before) this.levelUpFx(h);
       if (!d[7] && h.alive) {
         h.die(); h.outAt = this.t;
@@ -480,6 +485,7 @@ export class Game {
     this.paused = false;
     this.setup('');
     this.player.die();
+    for (const h of this.holes) h.shield = 0;
   }
 
   setPaused(p: boolean) {

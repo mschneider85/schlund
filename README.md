@@ -1,6 +1,6 @@
 # Schlund – Friss die Stadt
 
-Ein Arcade-Spiel als installierbare PWA: Du steuerst ein schwarzes Loch durch eine Low-Poly-Stadt, verschlingst alles, was hineinpasst, wächst und frisst am Ende die anderen Löcher. Eine Runde dauert 2 Minuten.
+Ein Arcade-Spiel als installierbare PWA: Du steuerst ein schwarzes Loch durch eine Low-Poly-Stadt, verschlingst alles, was hineinpasst, wächst und frisst am Ende die anderen Löcher. Eine Runde dauert 3 Minuten.
 
 ```bash
 npm install

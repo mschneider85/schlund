@@ -1,6 +1,6 @@
 import { joinRoom } from 'trystero';
 import { Mqtt } from './mqtt';
-import type { Game } from './game';
+import { SHIELD, type Game } from './game';
 import { cleanName, type Hole } from './hole';
 
 /**
@@ -19,7 +19,7 @@ import { cleanName, type Hole } from './hole';
 export interface HoleInfo {
   name: string; color: number; peer: string | null;
   level: number; xp: number; score: number; kills: number;
-  alive: boolean; x: number; z: number;
+  alive: boolean; x: number; z: number; shield: number;
 }
 export interface Welcome {
   /** Kennung der Runde (bleibt beim Host-Wechsel gleich) */
@@ -36,7 +36,7 @@ type Ev =
   | ['k', number, number]
   | ['id', number, string, number, string | null]
   | ['end'];
-/** Zustand je Loch: x, z, vx, vz, level, xp, score, alive, kills */
+/** Zustand je Loch: x, z, vx, vz, level, xp, score, alive, kills, shield */
 type HoleState = number[];
 interface State { left: number; h: HoleState[] }
 
@@ -303,6 +303,7 @@ export class Net {
     h.setIdentity(name, color);
     h.peer = peerId; h.ctrl = 'net';
     h.setNet(h.x, h.z, 0, 0, now());
+    h.shield = SHIELD + 3; // + eigener Countdown des Neuen
     if (!this.peers.has(peerId)) this.peers.set(peerId, { p: { st: 'client' }, seen: now() });
     this.emit(['id', h.id, name, color, peerId]);
     this.flush();
@@ -310,7 +311,7 @@ export class Net {
       rid: this.rid, seed: g.world.seed, left: g.timeLeft, cd: g.countdown, slot: h.id, host: this.self,
       holes: g.holes.map((o) => ({
         name: o.name, color: o.color, peer: o.peer, level: o.level, xp: o.xp, score: o.score, kills: o.kills,
-        alive: o.alive, x: r2(o.x), z: r2(o.z),
+        alive: o.alive, x: r2(o.x), z: r2(o.z), shield: r2(o.shield),
       })),
       dead: b64(g.world.deadMask()),
     };
@@ -341,7 +342,7 @@ export class Net {
       this.stT -= dt; this.stTm -= dt; this.mvT -= dt; this.mvTm -= dt;
       const st = () => ({
         left: r2(g.timeLeft),
-        h: g.holes.map((h) => [r2(h.x), r2(h.z), r2(h.vx), r2(h.vz), h.level, r2(h.xp), h.score, h.alive ? 1 : 0, h.kills]),
+        h: g.holes.map((h) => [r2(h.x), r2(h.z), r2(h.vx), r2(h.vz), h.level, r2(h.xp), h.score, h.alive ? 1 : 0, h.kills, r2(h.shield)]),
       } as State);
       if (this.stT <= 0 && rtc.length) { this.stT = 1 / 15; this.sendTo('st', st(), rtc); }
       if (this.stTm <= 0 && mq.length) { this.stTm = 1 / 10; this.sendTo('st', st(), mq); }

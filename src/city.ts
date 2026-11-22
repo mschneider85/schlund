@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { T, BUILDINGS, type ObjType } from './objects';
 
-// kompakte Karte: in 2 Minuten soll man einen Großteil der Stadt schaffen
+// kompakte Karte: in einer Runde soll man einen Großteil der Stadt schaffen
 export const HALF = 102; // Karte: [-HALF, HALF]²
 export const ROADS = [-80, -40, 0, 40, 80];
 export const ROAD_HW = 4.5; // halbe Fahrbahnbreite
